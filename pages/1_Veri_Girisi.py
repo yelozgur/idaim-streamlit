@@ -26,7 +26,7 @@ import sheets_client
 import drive_client
 import mobile_styles
 import utils
-from gps_component import get_gps, get_gps_from_query, clear_gps_query
+from gps_component import get_gps, get_gps_from_query, clear_gps_query, gps_button, get_gps_from_postmessage, render_gps_fallback_button
 
 
 # ============== PAGE SETUP ==============
