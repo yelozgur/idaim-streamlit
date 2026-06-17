@@ -1,6 +1,6 @@
-"""utils.py — Tüm sayfalar için ortak helper'lar.
+"""utils.py — Shared helpers across pages.
 
-Cache'li veri yükleme, renk skalası, format helper'ları.
+Cached data loading, color scales, format helpers.
 """
 import streamlit as st
 import pandas as pd
@@ -11,51 +11,51 @@ import sheets_client
 from config import DISTRICTS
 
 
-# ============== CACHE'Lİ VERİ YÜKLEME ==============
+# ============== CACHED DATA LOADERS ==============
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_cells() -> pd.DataFrame:
-    """Tüm 642 hücre (cache 5dk)."""
+    """All cells (5 min cache)."""
     try:
         return sheets_client.get_cells()
     except Exception as e:
-        st.error(f"Hücreler yüklenemedi: {e}")
+        st.error(f"Cells load error: {e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=120, show_spinner=False)
 def load_sampling_initiations() -> pd.DataFrame:
-    """Tüm sampling init (cache 2dk)."""
+    """All sampling inits (2 min cache)."""
     try:
         return sheets_client.get_sampling_initiations(active_only=False)
     except Exception as e:
-        st.error(f"Sampling initiation yüklenemedi: {e}")
+        st.error(f"Sampling initiation load error: {e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=120, show_spinner=False)
 def load_trap_checks() -> pd.DataFrame:
-    """Tüm trap check (cache 2dk)."""
+    """All trap checks (2 min cache)."""
     try:
         return sheets_client.get_trap_checks()
     except Exception as e:
-        st.error(f"Trap check'ler yüklenemedi: {e}")
+        st.error(f"Trap checks load error: {e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=120, show_spinner=False)
 def load_lab_results() -> pd.DataFrame:
-    """Tüm lab result (cache 2dk)."""
+    """All lab results (2 min cache)."""
     try:
         return sheets_client.get_lab_results()
     except Exception as e:
-        st.error(f"Lab sonuçları yüklenemedi: {e}")
+        st.error(f"Lab results load error: {e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_watch_list() -> pd.DataFrame:
-    """Watch list (cache 5dk)."""
+    """Watch list (5 min cache)."""
     try:
         return sheets_client.get_watch_list()
     except Exception:
@@ -63,7 +63,7 @@ def load_watch_list() -> pd.DataFrame:
 
 
 def clear_all_caches():
-    """Tüm cache'leri temizle (veri değişikliğinden sonra)."""
+    """Clear all caches (after data change)."""
     load_cells.clear()
     load_sampling_initiations.clear()
     load_trap_checks.clear()
@@ -75,9 +75,9 @@ def clear_all_caches():
 
 @st.cache_data(ttl=120, show_spinner=False)
 def load_labeled_cells() -> pd.DataFrame:
-    """Lab-confirmed hücreler (training data).
+    """Lab-confirmed cells (training data).
 
-    lab_results → sampling_initiation → cells JOIN
+    lab_results -> sampling_initiation -> cells JOIN
     """
     inits = load_sampling_initiations()
     labs = load_lab_results()
@@ -95,7 +95,7 @@ def load_labeled_cells() -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_traps_with_state() -> pd.DataFrame:
-    """Tüm trap'ler + en son check durumu + cell bilgisi."""
+    """All traps + last check + cell info."""
     inits = load_sampling_initiations()
     checks = load_trap_checks()
     cells = load_cells()
@@ -105,7 +105,6 @@ def load_traps_with_state() -> pd.DataFrame:
 
     df = inits.copy()
 
-    # Son check durumu
     if len(checks) > 0:
         last_checks = (checks
             .sort_values("check_datetime")
@@ -120,7 +119,6 @@ def load_traps_with_state() -> pd.DataFrame:
         df["last_check_time"] = None
         df["n_checks"] = 0
 
-    # Cell bilgisi
     if len(cells) > 0:
         df = df.merge(cells[["cell_id", "lon", "lat", "district", "culex_proba"]],
                       on="cell_id", how="left")
@@ -130,31 +128,31 @@ def load_traps_with_state() -> pd.DataFrame:
 # ============== COLOR HELPERS ==============
 
 def proba_to_color(proba: float, threshold: float = 0.10) -> str:
-    """ML olasılığını Folium renk skalasına çevir."""
+    """ML probability to Folium color."""
     if pd.isna(proba):
-        return "#9aa0a6"  # gri (unknown)
+        return "#9aa0a6"  # gray (unknown)
     if proba >= 0.7:
-        return "#7f0000"  # bordo
+        return "#7f0000"  # dark red
     if proba >= 0.5:
-        return "#d32f2f"  # kırmızı
+        return "#d32f2f"  # red
     if proba >= 0.3:
-        return "#f57c00"  # turuncu
+        return "#f57c00"  # orange
     if proba >= threshold:
-        return "#fbc02d"  # sarı
-    return "#bbdefb"      # açık mavi (low)
+        return "#fbc02d"  # yellow
+    return "#bbdefb"      # light blue (low)
 
 
 def state_to_color(state: str) -> str:
-    """Trap state → renk (markers için)."""
+    """Trap state -> color (markers)."""
     return {
-        "active": "#4caf50",    # yeşil
-        "closed": "#9e9e9e",    # gri
-        "missing": "#f44336",   # kırmızı
+        "active": "#4caf50",    # green
+        "closed": "#9e9e9e",    # gray
+        "missing": "#f44336",   # red
     }.get(state, "#9e9e9e")
 
 
 def status_to_color(status: str) -> str:
-    """Check status → renk (markers için)."""
+    """Check status -> color (markers)."""
     if status == "Trap valid":
         return "#4caf50"
     if status == "Trap Missing":
@@ -167,34 +165,34 @@ def status_to_color(status: str) -> str:
 
 
 def species_to_color(species: str) -> str:
-    """Lab species → renk."""
+    """Lab species -> color."""
     return {
-        "Culex": "#1976d2",      # mavi
-        "Aedes": "#d32f2f",      # kırmızı
-        "Mixed": "#7b1fa2",      # mor
-        "Other": "#757575",      # gri
-        "Negative": "#bdbdbd",   # açık gri
+        "Culex": "#1976d2",      # blue
+        "Aedes": "#d32f2f",      # red
+        "Mixed": "#7b1fa2",      # purple
+        "Other": "#757575",      # gray
+        "Negative": "#bdbdbd",   # light gray
     }.get(species, "#757575")
 
 
 # ============== FORMAT HELPERS ==============
 
 def fmt_proba(p: float) -> str:
-    """0.847 → '0.85' (gösterim için)."""
+    """0.847 -> '0.85'."""
     if pd.isna(p):
         return "—"
     return f"{p:.2f}"
 
 
 def fmt_count(n) -> str:
-    """Birey sayısı formatla."""
+    """Specimen count formatter."""
     if pd.isna(n) or n == 0:
         return "0"
     return f"{int(n)}"
 
 
 def safe_int(v, default=0) -> int:
-    """Güvenli int çevirme (None/NaN korumalı)."""
+    """Safe int conversion (None/NaN safe)."""
     try:
         if pd.isna(v):
             return default
@@ -206,18 +204,16 @@ def safe_int(v, default=0) -> int:
 # ============== METRICS ==============
 
 def compute_label_counts() -> dict:
-    """Lab-confirmed hücre sayıları (per species, per district)."""
+    """Lab-confirmed cell counts (per species)."""
     labeled = load_labeled_cells()
     if len(labeled) == 0:
         return {"total": 0, "culex_pos": 0, "culex_neg": 0, "aedes_pos": 0, "aedes_neg": 0}
 
     total = labeled["cell_id"].nunique()
 
-    # Culex: Culex pozitif, diğer her şey negatif
     culex_pos = labeled[labeled["species"] == "Culex"]["cell_id"].nunique()
     culex_neg = total - culex_pos
 
-    # Aedes: Aedes pozitif
     aedes_pos = labeled[labeled["species"] == "Aedes"]["cell_id"].nunique()
     aedes_neg = total - aedes_pos
 
@@ -231,7 +227,7 @@ def compute_label_counts() -> dict:
 
 
 def compute_trap_counts() -> dict:
-    """Trap durum istatistikleri."""
+    """Trap status counts."""
     inits = load_sampling_initiations()
     if len(inits) == 0:
         return {"active": 0, "closed": 0, "missing": 0, "total": 0}
@@ -245,10 +241,18 @@ def compute_trap_counts() -> dict:
     }
 
 
-# ============== AUTH HELPER ==============
+# ============== AUTH ==============
 
 def require_auth():
-    """Auth check, yoksa dur."""
+    """Auth check, stops if not logged in."""
     if not st.session_state.get("authenticated", False):
-        st.warning("🔐 Giriş yapın (ana sayfaya dönün)")
+        st.warning("Please sign in (go to the main page)")
+        st.stop()
+
+
+def require_admin():
+    """Admin-only check."""
+    require_auth()
+    if st.session_state.get("role") != "admin":
+        st.error("Access denied — admin only")
         st.stop()

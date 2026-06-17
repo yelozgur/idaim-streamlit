@@ -1,9 +1,9 @@
-"""2_🗺️_Dashboard.py — Operasyonel dashboard.
+"""2_🗺️_Dashboard.py — Operational dashboard.
 
-- Folium harita: 642 hücre (proba heatmap), trap markers, lab markers
-- Watch list paneli (sağda)
-- Filtreler: tür, confidence, district
-- Toplu trap kur (watch list'ten seçili → Sayfa 1'e prefill)
+- Folium map: cells (proba heatmap), trap markers, lab markers
+- Watch list panel
+- Filters: species, confidence, district
+- Trap setup shortcut from watch list
 """
 import streamlit as st
 import pandas as pd
@@ -24,7 +24,7 @@ from utils import (
     load_watch_list, load_traps_with_state, load_labeled_cells,
     proba_to_color, state_to_color, status_to_color, species_to_color,
     fmt_proba, fmt_count, compute_trap_counts, compute_label_counts,
-    clear_all_caches,
+    clear_all_caches, require_auth,
 )
 
 
@@ -32,22 +32,21 @@ from utils import (
 
 st.set_page_config(page_title="Dashboard", page_icon="🗺️", layout="wide")
 mobile_styles.inject_mobile_css()
-utils.require_auth()
+require_auth()
 
 
 # ============== HEADER ==============
 
-st.title("🗺️ Dashboard")
-st.caption("642 grid hücre + trap'ler + lab sonuçları + ML watch list")
+st.title("Dashboard")
+st.caption("Grid cells + traps + lab results + ML watch list")
 
-# Cache temizleme butonu
 col_refresh, col_info = st.columns([1, 5])
 with col_refresh:
-    if st.button("🔄 Yenile", use_container_width=True, help="Cache temizle"):
+    if st.button("Refresh", use_container_width=True, help="Clear cache"):
         clear_all_caches()
         st.rerun()
 with col_info:
-    st.caption("Sheets'ten okunmuş veriler 5dk cache'li. Manuel yenile için tıkla.")
+    st.caption("Sheets data is cached for 5 min. Click Refresh to force reload.")
 
 
 # ============== METRICS ROW ==============
@@ -56,24 +55,24 @@ trap_counts = compute_trap_counts()
 label_counts = compute_label_counts()
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("🗺️ Hücre", f"{len(load_cells())}")
-col2.metric("🪤 Aktif Trap", f"{trap_counts['active']}")
-col3.metric("🔍 Toplam Check", f"{len(load_trap_checks())}")
-col4.metric("🧪 Lab Sonucu", f"{label_counts['total']}")
-col5.metric("👀 Watch List", f"{len(load_watch_list())}")
+col1.metric("Cells", f"{len(load_cells())}")
+col2.metric("Active Traps", f"{trap_counts['active']}")
+col3.metric("Total Checks", f"{len(load_trap_checks())}")
+col4.metric("Lab Results", f"{label_counts['total']}")
+col5.metric("Watch List", f"{len(load_watch_list())}")
 
 st.markdown("---")
 
 
 # ============== FILTERS ==============
 
-st.subheader("🎛️ Filtreler")
+st.subheader("Filters")
 fcol1, fcol2, fcol3, fcol4 = st.columns(4)
 
 with fcol1:
     species_filter = st.selectbox(
-        "Tür / Renk skalası",
-        ["Culex (proba)", "Aedes (proba)", "Lab sonuçları"],
+        "Color scale",
+        ["Culex (proba)", "Aedes (proba)", "Lab results"],
         key="dash_species",
     )
 
@@ -88,31 +87,30 @@ with fcol2:
 with fcol3:
     confidence_filter = st.selectbox(
         "Confidence",
-        ["Tümü", "Sadece yüksek (≥0.7)", "Orta+yüksek (≥0.4)", "Sadece unknown"],
+        ["All", "High only (>=0.7)", "Medium+High (>=0.4)", "Unknown only"],
         key="dash_confidence",
     )
 
 with fcol4:
-    show_traps = st.checkbox("🪤 Trap'leri göster", value=True)
-    show_labs = st.checkbox("🧪 Lab markerları göster", value=True)
-    show_watch_only = st.checkbox("👀 Sadece watch list", value=False)
+    show_traps = st.checkbox("Show traps", value=True)
+    show_labs = st.checkbox("Show lab markers", value=True)
+    show_watch_only = st.checkbox("Watch list only", value=False)
 
 
-# ============== HARİTA ==============
+# ============== MAP ==============
 
 st.markdown("---")
-st.subheader("🗺️ Harita")
+st.subheader("Map")
 
 cells = load_cells()
 traps_df = load_traps_with_state()
 labs_df = load_lab_results()
 watch_df = load_watch_list()
 
-# Filtre uygula
+# Filters
 if len(cells) > 0 and len(district_filter) < len(config.DISTRICTS):
     cells = cells[cells["district"].isin(district_filter)]
 
-# Watch list filter
 if show_watch_only and len(watch_df) > 0:
     if species_filter == "Culex (proba)":
         watch_cells = watch_df[watch_df["species"] == "culex"]["cell_id"].tolist()
@@ -123,29 +121,27 @@ if show_watch_only and len(watch_df) > 0:
     if len(cells) > 0:
         cells = cells[cells["cell_id"].isin(watch_cells)]
 
-# Confidence filter
-if len(cells) > 0 and confidence_filter != "Tümü":
+if len(cells) > 0 and confidence_filter != "All":
     if species_filter == "Culex (proba)":
         col = "culex_proba"
     elif species_filter == "Aedes (proba)":
         col = "aedes_proba"
     else:
-        col = "culex_proba"  # lab modunda varsayılan
+        col = "culex_proba"
 
-    if confidence_filter == "Sadece yüksek (≥0.7)":
+    if confidence_filter == "High only (>=0.7)":
         cells = cells[pd.to_numeric(cells[col], errors="coerce") >= 0.7]
-    elif confidence_filter == "Orta+yüksek (≥0.4)":
+    elif confidence_filter == "Medium+High (>=0.4)":
         cells = cells[pd.to_numeric(cells[col], errors="coerce") >= 0.4]
-    elif confidence_filter == "Sadece unknown":
+    elif confidence_filter == "Unknown only":
         cells = cells[pd.to_numeric(cells[col], errors="coerce").isna()]
 
 
-# Folium harita oluştur
 if len(cells) == 0:
-    st.warning("Filtreler sonrası gösterilecek hücre kalmadı. Filtreleri gevşet.")
+    st.warning("No cells after filters. Loosen the filters.")
     st.stop()
 
-# Cyprus merkez
+# Cyprus center
 m = folium.Map(
     location=[34.9, 33.2],
     zoom_start=9,
@@ -153,50 +149,78 @@ m = folium.Map(
     control_scale=True,
 )
 
-# Hangi kolon kullanılacak
 proba_col = "culex_proba" if "Culex" in species_filter else (
     "aedes_proba" if "Aedes" in species_filter else "culex_proba"
 )
 
-# Hücreler (CircleMarker)
-cells_layer = folium.FeatureGroup(name="Hücreler", show=True)
-for _, row in cells.iterrows():
-    proba = pd.to_numeric(row.get(proba_col), errors="coerce")
-    color = proba_to_color(proba, threshold=0.10)
 
-    popup_html = f"""
-    <b>Hücre #{int(row['cell_id'])}</b><br>
-    District: {row.get('district', '?')}<br>
-    Lat/Lon: {row['lat']:.4f}, {row['lon']:.4f}<br>
-    <hr>
-    <b>Culex proba:</b> {fmt_proba(row.get('culex_proba'))}<br>
-    <b>Aedes proba:</b> {fmt_proba(row.get('aedes_proba'))}<br>
-    <b>Confidence:</b> {row.get('confidence_tier', '?')}<br>
-    <b>Son güncelleme:</b> {row.get('last_updated', '?')}
-    """
+# ============== CELLS — vectorized subset rendering ==============
 
-    folium.CircleMarker(
-        location=[row["lat"], row["lon"]],
-        radius=6,
-        popup=folium.Popup(popup_html, max_width=300),
-        tooltip=f"#{int(row['cell_id'])} | {row.get('district', '?')} | {fmt_proba(proba)}",
-        color=color,
-        fill=True,
-        fill_color=color,
-        fill_opacity=0.6,
-        weight=1,
-    ).add_to(cells_layer)
+# For large grids (37K cells), only pin high-probability cells. Show all via
+# lighter rendering if grid is small.
+N_CELLS = len(cells)
+SUBSET_THRESHOLD = 5000
+
+if N_CELLS > SUBSET_THRESHOLD:
+    # Show only high-probability cells (>= 0.3) as pins
+    pin_df = cells[pd.to_numeric(cells[proba_col], errors="coerce").fillna(0) >= 0.3].copy()
+    st.caption(f"Large grid ({N_CELLS} cells) — showing {len(pin_df)} high-probability pins (>= 0.3). All cells still on the map layer.")
+else:
+    pin_df = cells
+    st.caption(f"{N_CELLS} cells shown.")
+
+# Vectorized: build popup + tooltip lists, then a single FeatureGroup
+cells_layer = folium.FeatureGroup(name="Cells", show=True)
+
+if len(pin_df) > 0:
+    lats = pin_df["lat"].tolist()
+    lons = pin_df["lon"].tolist()
+    cell_ids = pin_df["cell_id"].astype(int).tolist()
+    districts = pin_df.get("district", pd.Series(["?"] * len(pin_df))).tolist()
+    culex_probas = pin_df.get("culex_proba", pd.Series([np.nan] * len(pin_df))).tolist()
+    aedes_probas = pin_df.get("aedes_proba", pd.Series([np.nan] * len(pin_df))).tolist()
+    confidence_tiers = pin_df.get("confidence_tier", pd.Series(["?"] * len(pin_df))).tolist()
+    last_updated = pin_df.get("last_updated", pd.Series(["?"] * len(pin_df))).tolist()
+    selected_probas = pin_df[proba_col].tolist()
+
+    for lat, lon, cid, dist, cp, ap, ct, lu, sp in zip(
+        lats, lons, cell_ids, districts, culex_probas, aedes_probas,
+        confidence_tiers, last_updated, selected_probas,
+    ):
+        color = proba_to_color(sp, threshold=0.10)
+        popup_html = f"""
+        <b>Cell #{cid}</b><br>
+        District: {dist}<br>
+        Lat/Lon: {lat:.4f}, {lon:.4f}<br>
+        <hr>
+        <b>Culex proba:</b> {fmt_proba(cp)}<br>
+        <b>Aedes proba:</b> {fmt_proba(ap)}<br>
+        <b>Confidence:</b> {ct}<br>
+        <b>Last updated:</b> {lu}
+        """
+        folium.CircleMarker(
+            location=[lat, lon],
+            radius=6,
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=f"#{cid} | {dist} | {fmt_proba(sp)}",
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.6,
+            weight=1,
+        ).add_to(cells_layer)
+
 cells_layer.add_to(m)
 
 
-# Trap markers
+# ============== TRAPS ==============
+
 if show_traps and len(traps_df) > 0:
-    traps_layer = folium.FeatureGroup(name="🪤 Trap'ler", show=True)
+    traps_layer = folium.FeatureGroup(name="Traps", show=True)
     for _, row in traps_df.iterrows():
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             continue
 
-        # Renk: state veya son check durumu
         if pd.notna(row.get("last_check")):
             color = status_to_color(row["last_check"])
         else:
@@ -204,18 +228,16 @@ if show_traps and len(traps_df) > 0:
 
         popup_html = f"""
         <b>Trap {row['trap_id']}</b><br>
-        Hücre: #{int(row['cell_id'])} ({row.get('district', '?')})<br>
+        Cell: #{int(row['cell_id'])} ({row.get('district', '?')})<br>
         Operator: {row.get('operator', '?')}<br>
         Method: {row.get('sampling_method', '?')}<br>
         State: {row.get('state', '?')}<br>
         <hr>
-        <b>Son check:</b> {row.get('last_check', '—')}<br>
-        <b>Check zamanı:</b> {row.get('last_check_time', '—')}<br>
-        <b>Check sayısı:</b> {fmt_count(row.get('n_checks'))}
+        <b>Last check:</b> {row.get('last_check', '—')}<br>
+        <b>Check time:</b> {row.get('last_check_time', '—')}<br>
+        <b>Check count:</b> {fmt_count(row.get('n_checks'))}
         """
 
-        # Icon tipi
-        icon = "circle" if row.get("state") == "active" else "circle"
         folium.Marker(
             location=[row["lat"], row["lon"]],
             popup=folium.Popup(popup_html, max_width=300),
@@ -226,37 +248,37 @@ if show_traps and len(traps_df) > 0:
     traps_layer.add_to(m)
 
 
-# Lab markers
+# ============== LAB MARKERS ==============
+
 if show_labs and len(labs_df) > 0:
-    labs_layer = folium.FeatureGroup(name="🧪 Lab Sonuçları", show=True)
+    labs_layer = folium.FeatureGroup(name="Lab Results", show=True)
     for _, row in labs_df.iterrows():
-        # Cell bilgisi
         cell = cells[cells["cell_id"] == row["cell_id"]]
         if len(cell) == 0:
             continue
         lat, lon = cell.iloc[0]["lat"], cell.iloc[0]["lon"]
 
         color = species_to_color(row.get("species", "Other"))
-        species_short = row.get("species", "?")[:1]  # C / A / M / O / N
+        species_short = row.get("species", "?")[:1]
 
         popup_html = f"""
         <b>Lab — {row['lab_id']}</b><br>
         Trap: {row['trap_id']}<br>
-        Hücre: #{int(row['cell_id'])}<br>
+        Cell: #{int(row['cell_id'])}<br>
         <hr>
-        <b>Tür:</b> {row.get('species', '?')}<br>
-        <b>Birey:</b> {fmt_count(row.get('count'))}<br>
+        <b>Species:</b> {row.get('species', '?')}<br>
+        <b>Count:</b> {fmt_count(row.get('count'))}<br>
         <b>Lifecycle:</b> {row.get('specimen_lifecycle', '?')}<br>
         <b>Method:</b> {row.get('identification_method', '?')}<br>
         <b>Confidence:</b> {row.get('lab_confidence', '?')}<br>
-        <b>Tarih:</b> {row.get('lab_date', '?')}<br>
+        <b>Date:</b> {row.get('lab_date', '?')}<br>
         <b>Operator:</b> {row.get('lab_operator', '?')}
         """
 
         folium.Marker(
             location=[lat, lon],
             popup=folium.Popup(popup_html, max_width=300),
-            tooltip=f"{row.get('species', '?')} ×{fmt_count(row.get('count'))}",
+            tooltip=f"{row.get('species', '?')} x{fmt_count(row.get('count'))}",
             icon=folium.DivIcon(
                 html=f'<div style="background:{color};color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3)">{species_short}</div>',
                 icon_size=(24, 24),
@@ -266,11 +288,8 @@ if show_labs and len(labs_df) > 0:
     labs_layer.add_to(m)
 
 
-# Layer control
 folium.LayerControl(collapsed=False).add_to(m)
 
-
-# Haritayı göster
 map_data = st_folium(
     m,
     height=550,
@@ -283,16 +302,15 @@ map_data = st_folium(
 # ============== WATCH LIST ==============
 
 st.markdown("---")
-st.subheader("👀 Watch List")
-st.caption("ML'in önerdiği yüksek olasılıklı hücreler (henüz trap kurulmamış)")
+st.subheader("Watch List")
+st.caption("High-probability cells suggested by ML (no trap set up yet)")
 
 watch_df = load_watch_list()
 if len(watch_df) == 0:
-    st.info("Watch list boş. ML Retrain sayfasından model çalıştırın.")
+    st.info("Watch list is empty. Run training from the Admin page.")
 else:
-    # Tür filtresi
     wspecies = st.radio(
-        "Tür",
+        "Species",
         ["culex", "aedes"],
         horizontal=True,
         key="watch_species",
@@ -301,91 +319,83 @@ else:
     wdf = wdf.sort_values("proba", ascending=False).head(50)
 
     if len(wdf) == 0:
-        st.info(f"{wspecies} için watch list boş.")
+        st.info(f"No watch list entries for {wspecies}.")
     else:
-        # District bazlı özet
-        st.caption(f"📊 {len(wdf)} hücre watch'ta, district bazlı:")
+        st.caption(f"{len(wdf)} cells on watch, by district:")
         district_summary = wdf.groupby("district").size().reset_index(name="count")
         dcols = st.columns(min(6, len(district_summary)))
         for i, (_, drow) in enumerate(district_summary.iterrows()):
             with dcols[i % len(dcols)]:
                 st.metric(drow["district"], int(drow["count"]))
 
-        # Tablo
         display_df = wdf[["cell_id", "district", "proba", "threshold_used", "visited"]].copy()
         display_df["proba"] = display_df["proba"].apply(fmt_proba)
         display_df["threshold_used"] = display_df["threshold_used"].apply(fmt_proba)
-        display_df.columns = ["Cell", "District", "Proba", "Threshold", "Ziyaret"]
+        display_df.columns = ["Cell", "District", "Proba", "Threshold", "Visited"]
 
         st.dataframe(display_df, use_container_width=True, height=300)
 
-        # Toplu trap kur (Sayfa 1'e yönlendir)
-        st.markdown("##### 🎯 Trap Kur (Watch List'ten)")
-        st.caption("Seçili hücreler için trap kurulumu başlat")
+        st.markdown("##### Set Up Traps (from Watch List)")
+        st.caption("Start trap setup for the selected cells")
 
-        # Session state ile Sayfa 1'e prefill
         if "prefill_cells" not in st.session_state:
             st.session_state.prefill_cells = []
 
-        # Multiselect
         cell_options = wdf["cell_id"].astype(str) + " — " + wdf["district"] + " (proba=" + wdf["proba"].apply(fmt_proba) + ")"
         selected = st.multiselect(
-            "Hücre seç (trap kurmak için)",
+            "Select cells to set up traps",
             options=cell_options.tolist(),
             key="watch_selected",
         )
 
-        if st.button("🪤 Seçili Hücreler İçin Sayfa 1'e Git", type="primary"):
+        if st.button("Go to Data Entry for Selected Cells", type="primary"):
             if not selected:
-                st.warning("Önce hücre seçin")
+                st.warning("Select cells first")
             else:
-                # Cell_id'leri parse et
                 selected_ids = [int(s.split(" — ")[0]) for s in selected]
                 st.session_state.prefill_cells = selected_ids
-                st.switch_page("pages/1_📥_Veri_Girişi.py")
+                st.switch_page("pages/1_📥_Data_Entry.py")
 
 
-# ============== ÖZET İSTATİSTİKLER ==============
+# ============== SUMMARY ==============
 
 st.markdown("---")
-st.subheader("📈 Özet")
+st.subheader("Summary")
 
 scol1, scol2 = st.columns(2)
 
 with scol1:
-    st.markdown("**🧪 Lab Türleri (per species)**")
+    st.markdown("**Lab species**")
     if len(labs_df) > 0:
         species_count = labs_df["species"].value_counts()
         for sp, cnt in species_count.items():
             color = species_to_color(sp)
             st.markdown(
-                f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-size:14px">{sp}</span> {int(cnt)} trap',
+                f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-size:14px">{sp}</span> {int(cnt)} traps',
                 unsafe_allow_html=True,
             )
     else:
-        st.caption("Henüz lab sonucu yok")
+        st.caption("No lab results yet")
 
 with scol2:
-    st.markdown("**🪤 Trap Durumları**")
+    st.markdown("**Trap status**")
     if len(traps_df) > 0:
-        # Son check bazlı
         if "last_check" in traps_df.columns:
             status_count = traps_df["last_check"].value_counts(dropna=False)
             for st_name, cnt in status_count.items():
                 if pd.isna(st_name):
-                    label, color = "Kontrol edilmedi", "#bbdefb"
+                    label, color = "Not checked", "#bbdefb"
                 else:
                     label, color = st_name, status_to_color(st_name)
                 st.markdown(
-                    f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-size:14px">{label}</span> {int(cnt)} trap',
+                    f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-size:14px">{label}</span> {int(cnt)} traps',
                     unsafe_allow_html=True,
                 )
     else:
-        st.caption("Henüz trap kurulmamış")
+        st.caption("No traps set up yet")
 
 
-# Footer
 st.markdown("---")
 st.caption("""
-🎨 **Renk skalası:** 🔴 Bordo (≥0.7) → 🔴 Kırmızı (≥0.5) → 🟠 Turuncu (≥0.3) → 🟡 Sarı (≥0.10) → 🔵 Açık mavi (low) → ⬜ Gri (unknown)
+Color scale: dark red (>=0.7) -> red (>=0.5) -> orange (>=0.3) -> yellow (>=0.10) -> light blue (low) -> gray (unknown)
 """)

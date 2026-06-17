@@ -1,11 +1,11 @@
-"""4_📊_Raporlar.py — Validation metrikleri, per-district, trend.
+"""4_📊_Reports.py — Validation metrics, per-district, trends.
 
-Plotly grafikleri:
-- Lab tür dağılımı (pie)
-- District bazlı lab count (bar)
-- Trap durumları (timeline)
-- Son 30 gün aktivite trendi
-- Per-district ML tahmin istatistikleri (cells sheet'inden)
+Plotly charts:
+- Lab species distribution (pie)
+- Per-district lab count (bar)
+- Trap status timeline
+- Last 30 days activity trend
+- Per-district ML prediction stats (from cells sheet)
 """
 import streamlit as st
 import pandas as pd
@@ -25,24 +25,24 @@ from utils import (
     load_cells, load_sampling_initiations, load_trap_checks, load_lab_results,
     load_watch_list, load_traps_with_state, load_labeled_cells,
     fmt_proba, fmt_count, compute_label_counts, compute_trap_counts,
-    species_to_color, status_to_color,
+    species_to_color, status_to_color, require_auth,
 )
 
 
 # ============== PAGE SETUP ==============
 
-st.set_page_config(page_title="Raporlar", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Reports", page_icon="📊", layout="wide")
 mobile_styles.inject_mobile_css()
-utils.require_auth()
+require_auth()
 
 
 # ============== HEADER ==============
 
-st.title("📊 Raporlar")
-st.caption("Validation metrikleri, per-district istatistikler, operasyonel trend")
+st.title("Reports")
+st.caption("Validation metrics, per-district statistics, operational trends")
 
 
-# ============== VERİ YÜKLE ==============
+# ============== LOAD DATA ==============
 
 cells = load_cells()
 inits = load_sampling_initiations()
@@ -53,23 +53,23 @@ labeled = load_labeled_cells()
 traps_full = load_traps_with_state()
 
 
-# ============== ÜST METRİKLER ==============
+# ============== TOP METRICS ==============
 
-st.subheader("📈 Genel Durum")
+st.subheader("Overall")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
-col1.metric("🗺️ Hücre", len(cells))
-col2.metric("🪤 Trap Kurulmuş", len(inits))
-col3.metric("🔍 Check", len(checks))
-col4.metric("🧪 Lab Sonucu", len(labs))
-col5.metric("👀 Watch List", len(watch))
-col6.metric("📍 Active Trap", compute_trap_counts()["active"])
+col1.metric("Cells", len(cells))
+col2.metric("Traps Installed", len(inits))
+col3.metric("Checks", len(checks))
+col4.metric("Lab Results", len(labs))
+col5.metric("Watch List", len(watch))
+col6.metric("Active Traps", compute_trap_counts()["active"])
 
 st.markdown("---")
 
 
-# ============== TÜR DAĞILIMI ==============
+# ============== SPECIES DISTRIBUTION ==============
 
-st.subheader("🦟 Tür Dağılımı (Lab)")
+st.subheader("Species Distribution (Lab)")
 
 if len(labs) > 0:
     species_count = labs["species"].value_counts().reset_index()
@@ -88,21 +88,19 @@ if len(labs) > 0:
     fig.update_layout(height=350, margin=dict(t=20, b=20, l=20, r=20))
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Henüz lab sonucu yok.")
+    st.info("No lab results yet.")
 
 
-# ============== DISTRICT BAZLI ==============
+# ============== PER-DISTRICT ==============
 
-st.subheader("📍 District Bazlı İstatistikler")
+st.subheader("Per-District Statistics")
 
 if len(labs) > 0 and len(cells) > 0:
-    # Lab-confirmed hücrelerde district dağılımı
     district_stats = []
     for district in config.DISTRICTS:
         district_cells = cells[cells["district"] == district]
         n_cells = len(district_cells)
 
-        # Lab sonuçları bu district'te
         district_cell_ids = district_cells["cell_id"].astype(int).tolist()
         district_labs = labs[labs["cell_id"].isin(district_cell_ids)]
 
@@ -112,8 +110,8 @@ if len(labs) > 0 and len(cells) > 0:
 
         district_stats.append({
             "District": district,
-            "Toplam Hücre": n_cells,
-            "Lab Sonucu": len(district_labs),
+            "Total Cells": n_cells,
+            "Lab Results": len(district_labs),
             "Culex": species_breakdown["Culex"],
             "Aedes": species_breakdown["Aedes"],
             "Other": species_breakdown["Other"] + species_breakdown["Mixed"],
@@ -130,26 +128,24 @@ if len(labs) > 0 and len(cells) > 0:
 
     fig.update_layout(
         barmode="stack", height=400,
-        xaxis_title="District", yaxis_title="Lab-confirmed Hücre Sayısı",
+        xaxis_title="District", yaxis_title="Lab-confirmed Cell Count",
         margin=dict(t=20, b=20, l=20, r=20),
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("📋 Detaylı tablo"):
+    with st.expander("Detailed table"):
         st.dataframe(district_df, use_container_width=True, hide_index=True)
 else:
-    st.info("District analizi için lab sonucu gerekli.")
+    st.info("District analysis requires lab results.")
 
 
-# ============== ML OUTPUT PER DISTRICT ==============
+# ============== ML PREDICTIONS PER DISTRICT ==============
 
-st.subheader("🤖 ML Tahmin İstatistikleri (per District)")
+st.subheader("ML Prediction Statistics (per District)")
 
 if len(cells) > 0 and "culex_proba" in cells.columns:
-    # culex_proba parse et
     cells["culex_proba_num"] = pd.to_numeric(cells["culex_proba"], errors="coerce")
 
-    # District bazlı istatistik
     ml_stats = []
     for district in config.DISTRICTS:
         d = cells[cells["district"] == district]
@@ -163,18 +159,17 @@ if len(cells) > 0 and "culex_proba" in cells.columns:
 
         ml_stats.append({
             "District": district,
-            "Hücre": n,
-            "Yüksek (≥0.7)": n_high,
-            "Orta (0.4-0.7)": n_med,
-            "Düşük (0.1-0.4)": n_low,
-            "Bilinmiyor": n_unknown,
-            "Ortalama Proba": fmt_proba(mean_proba) if mean_proba is not None else "—",
+            "Cells": n,
+            "High (>=0.7)": n_high,
+            "Medium (0.4-0.7)": n_med,
+            "Low (0.1-0.4)": n_low,
+            "Unknown": n_unknown,
+            "Mean Proba": fmt_proba(mean_proba) if mean_proba is not None else "—",
         })
 
     ml_df = pd.DataFrame(ml_stats)
     st.dataframe(ml_df, use_container_width=True, hide_index=True)
 
-    # Confidence tier dağılımı
     if "confidence_tier" in cells.columns:
         tier_count = cells["confidence_tier"].value_counts().reset_index()
         tier_count.columns = ["tier", "count"]
@@ -187,12 +182,12 @@ if len(cells) > 0 and "culex_proba" in cells.columns:
         fig.update_layout(height=300, showlegend=False, margin=dict(t=20, b=20, l=20, r=20))
         st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("ML henüz çalıştırılmadı. Sayfa 3'te retrain yapın.")
+    st.info("ML has not been run yet. Trigger training from the Admin page.")
 
 
 # ============== TRAP TIMELINE ==============
 
-st.subheader("🪤 Trap Aktivite Trendi")
+st.subheader("Trap Activity Trend")
 
 if len(inits) > 0 and "sampling_start_time" in inits.columns:
     inits["date"] = pd.to_datetime(inits["sampling_start_time"], errors="coerce").dt.date
@@ -202,18 +197,18 @@ if len(inits) > 0 and "sampling_start_time" in inits.columns:
     fig = px.line(
         daily_inits, x="date", y="count",
         markers=True,
-        labels={"count": "Yeni Trap", "date": "Tarih"},
+        labels={"count": "New Traps", "date": "Date"},
     )
     fig.update_traces(line_color="#1a73e8", marker=dict(size=8))
     fig.update_layout(height=350, margin=dict(t=20, b=20, l=20, r=20))
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Henüz trap kurulumu yok.")
+    st.info("No trap installations yet.")
 
 
 # ============== LAB CONFIDENCE ==============
 
-st.subheader("🔬 Lab Confidence Dağılımı")
+st.subheader("Lab Confidence Distribution")
 
 if len(labs) > 0 and "lab_confidence" in labs.columns:
     conf_count = labs["lab_confidence"].value_counts().reset_index()
@@ -229,18 +224,18 @@ if len(labs) > 0 and "lab_confidence" in labs.columns:
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption("""
-    **lab_confidence otomatik hesaplanır:**
+    **lab_confidence is auto-calculated:**
     - `high`: Adult + Molecular
-    - `medium`: Larva + Morphological (veya diğer kombinasyonlar)
+    - `medium`: Larva + Morphological (or other combinations)
     - `low`: Egg + Morphological
     """)
 else:
-    st.info("Lab sonucu yok.")
+    st.info("No lab results.")
 
 
-# ============== SPECIMEN LIFECYCLE & METHOD ==============
+# ============== LIFECYCLE & METHOD ==============
 
-st.subheader("🧪 Specimen Lifecycle & Method")
+st.subheader("Specimen Lifecycle & Method")
 
 if len(labs) > 0:
     col_l1, col_l2 = st.columns(2)
@@ -263,50 +258,49 @@ if len(labs) > 0:
             fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Lab sonucu yok.")
+    st.info("No lab results.")
 
 
-# ============== SON AKTİVİTELER ==============
+# ============== RECENT ACTIVITY ==============
 
-st.subheader("📅 Son Aktiviteler")
+st.subheader("Recent Activity")
 
 col_act1, col_act2, col_act3 = st.columns(3)
 
 with col_act1:
-    st.markdown("**🪤 Son Trap Kurulumları**")
+    st.markdown("**Recent Trap Installations**")
     if len(inits) > 0 and "sampling_start_time" in inits.columns:
         recent_init = inits[["trap_id", "cell_id", "operator", "sampling_start_time"]].copy()
         recent_init["sampling_start_time"] = pd.to_datetime(recent_init["sampling_start_time"], errors="coerce")
         recent_init = recent_init.sort_values("sampling_start_time", ascending=False).head(5)
         for _, row in recent_init.iterrows():
-            st.caption(f"• {row['trap_id']} — cell #{int(row['cell_id']) if pd.notna(row['cell_id']) else '?'} ({row['operator']})")
+            st.caption(f"{row['trap_id']} — cell #{int(row['cell_id']) if pd.notna(row['cell_id']) else '?'} ({row['operator']})")
     else:
-        st.caption("Henüz trap yok")
+        st.caption("No traps yet")
 
 with col_act2:
-    st.markdown("**🔍 Son Check'ler**")
+    st.markdown("**Recent Checks**")
     if len(checks) > 0 and "check_datetime" in checks.columns:
         recent_check = checks[["trap_id", "trap_status", "check_datetime"]].copy()
         recent_check["check_datetime"] = pd.to_datetime(recent_check["check_datetime"], errors="coerce")
         recent_check = recent_check.sort_values("check_datetime", ascending=False).head(5)
         for _, row in recent_check.iterrows():
-            st.caption(f"• {row['trap_id']} — {row['trap_status']}")
+            st.caption(f"{row['trap_id']} — {row['trap_status']}")
     else:
-        st.caption("Henüz check yok")
+        st.caption("No checks yet")
 
 with col_act3:
-    st.markdown("**🧪 Son Lab Sonuçları**")
+    st.markdown("**Recent Lab Results**")
     if len(labs) > 0 and "lab_date" in labs.columns:
         recent_lab = labs[["trap_id", "species", "count", "lab_date"]].copy()
         recent_lab["lab_date"] = pd.to_datetime(recent_lab["lab_date"], errors="coerce")
         recent_lab = recent_lab.sort_values("lab_date", ascending=False).head(5)
         for _, row in recent_lab.iterrows():
-            sp_emoji = {"Culex": "🔵", "Aedes": "🔴", "Mixed": "🟣", "Other": "⚪", "Negative": "⚫"}.get(row["species"], "❓")
-            st.caption(f"• {row['trap_id']} — {sp_emoji} {row['species']} (×{fmt_count(row['count'])})")
+            sp_emoji = {"Culex": "BLU", "Aedes": "RED", "Mixed": "PUR", "Other": "GRY", "Negative": "BLK"}.get(row["species"], "?")
+            st.caption(f"{row['trap_id']} — {sp_emoji} {row['species']} (x{fmt_count(row['count'])})")
     else:
-        st.caption("Henüz lab sonucu yok")
+        st.caption("No lab results yet")
 
 
-# Footer
 st.markdown("---")
-st.caption(f"📅 Rapor zamanı: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | IDAIM Cyprus v0.5")
+st.caption(f"Report time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | IDAIM Cyprus v0.6")

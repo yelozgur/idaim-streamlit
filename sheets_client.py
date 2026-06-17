@@ -1,9 +1,8 @@
 """sheets_client.py — Google Sheets wrapper.
 
-6 sheet'i tek noktadan yönetir. Tüm okuma/yazma işlemleri burada.
-gspread + gspread-dataframe kullanır.
+All read/write operations go through here. Uses gspread + gspread-dataframe.
 
-Service account auth: streamlit secrets'tan JSON key.
+Service account auth: JSON key from streamlit secrets.
 """
 import gspread
 import pandas as pd
@@ -20,44 +19,44 @@ from config import SHEET_NAMES, DEFAULT_USERS
 
 @st.cache_resource
 def get_gspread_client():
-    """Service account ile gspread client döner (cache'li)."""
+    """Service-account gspread client (cached)."""
     try:
         creds_dict = st.secrets["gcp_service_account"]
         gc = gspread.service_account_from_dict(creds_dict)
         return gc
     except Exception as e:
-        st.error(f"❌ Google auth başarısız: {e}")
+        st.error(f"Google auth failed: {e}")
         st.stop()
 
 
 @st.cache_resource
 def get_spreadsheet():
-    """Spreadsheet objesi (cache'li)."""
+    """Spreadsheet object (cached)."""
     gc = get_gspread_client()
     sheet_id = st.secrets["spreadsheet"]["id"]
     return gc.open_by_key(sheet_id)
 
 
 def get_worksheet(name: str):
-    """İsme göre worksheet döner."""
+    """Worksheet by name."""
     sh = get_spreadsheet()
     try:
         return sh.worksheet(name)
     except gspread.WorksheetNotFound:
-        st.error(f"❌ Sheet bulunamadı: '{name}'. SHEETS_HEADERS.md'a bak.")
+        st.error(f"Sheet not found: '{name}'. See SHEETS_HEADERS.md.")
         st.stop()
 
 
 # ============== READ ==============
 
 def read_sheet(name: str, dtype_fix: bool = True) -> pd.DataFrame:
-    """Sheet'i DataFrame olarak okur.
+    """Read sheet as DataFrame.
 
-    dtype_fix=True ise sayısal kolonları düzeltir (Sheets'te hep string gelir).
+    With dtype_fix=True, numeric columns are coerced (Sheets returns strings).
     """
     ws = get_worksheet(name)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-    df = df.dropna(how="all")  # boş satırları at
+    df = df.dropna(how="all")
 
     if dtype_fix and len(df) > 0:
         df = _fix_dtypes(df, name)
@@ -65,7 +64,7 @@ def read_sheet(name: str, dtype_fix: bool = True) -> pd.DataFrame:
 
 
 def _fix_dtypes(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
-    """Sheet tipine göre kolon dtype'larını düzelt."""
+    """Fix dtypes per sheet."""
     if sheet_name == "cells":
         if "cell_id" in df.columns:
             df["cell_id"] = pd.to_numeric(df["cell_id"], errors="coerce").astype("Int64")
@@ -94,7 +93,6 @@ def _fix_dtypes(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             df["visited"] = df["visited"].astype(str).str.lower().isin(["true", "1", "yes"])
 
     elif sheet_name == "users":
-        # şifre hash'leri string kalır
         pass
 
     return df
@@ -103,17 +101,16 @@ def _fix_dtypes(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
 # ============== WRITE ==============
 
 def append_row(sheet_name: str, row: dict):
-    """Tek satır ekle. dict'in key'leri header ile eşleşmeli."""
+    """Append a single row. Dict keys must match sheet headers."""
     ws = get_worksheet(sheet_name)
     headers = ws.row_values(1)
     row_values = [str(row.get(h, "")) for h in headers]
     ws.append_row(row_values, value_input_option="USER_ENTERED")
-    # Cache temizle
     read_sheet.clear()
 
 
 def append_rows(sheet_name: str, rows: list[dict]):
-    """Birden fazla satır ekle (toplu)."""
+    """Append multiple rows (batch)."""
     if not rows:
         return
     ws = get_worksheet(sheet_name)
@@ -124,7 +121,7 @@ def append_rows(sheet_name: str, rows: list[dict]):
 
 
 def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
-    """Tek hücre güncelle (1-indexed row)."""
+    """Update a single cell (1-indexed row)."""
     ws = get_worksheet(sheet_name)
     headers = ws.row_values(1)
     col_idx = headers.index(col_name) + 1
@@ -133,7 +130,7 @@ def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
 
 
 def update_dataframe(sheet_name: str, df: pd.DataFrame, start_row: int = 2):
-    """DataFrame'i sheet'e yaz (mevcut verinin üstüne)."""
+    """Write DataFrame to sheet (overwrites existing data, headers preserved)."""
     ws = get_worksheet(sheet_name)
     set_with_dataframe(ws, df, row=start_row, include_column_header=False)
     read_sheet.clear()
@@ -142,12 +139,12 @@ def update_dataframe(sheet_name: str, df: pd.DataFrame, start_row: int = 2):
 # ============== SPECIFIC HELPERS ==============
 
 def get_cells() -> pd.DataFrame:
-    """Tüm 642 hücre + ML output."""
+    """All cells + ML output."""
     return read_sheet("cells")
 
 
 def get_sampling_initiations(active_only: bool = True) -> pd.DataFrame:
-    """Sampling initiation kayıtları."""
+    """Sampling initiation records."""
     df = read_sheet("sampling_initiation")
     if active_only and "state" in df.columns and len(df) > 0:
         df = df[df["state"] == "active"]
@@ -155,7 +152,7 @@ def get_sampling_initiations(active_only: bool = True) -> pd.DataFrame:
 
 
 def get_trap_checks(trap_id: Optional[str] = None) -> pd.DataFrame:
-    """Trap check'leri (opsiyonel filtre)."""
+    """Trap checks (optional trap filter)."""
     df = read_sheet("trap_checks")
     if trap_id and "trap_id" in df.columns and len(df) > 0:
         df = df[df["trap_id"] == trap_id]
@@ -163,7 +160,7 @@ def get_trap_checks(trap_id: Optional[str] = None) -> pd.DataFrame:
 
 
 def get_lab_results(cell_id: Optional[int] = None) -> pd.DataFrame:
-    """Lab sonuçları (opsiyonel cell filtresi)."""
+    """Lab results (optional cell filter)."""
     df = read_sheet("lab_results")
     if cell_id and "cell_id" in df.columns and len(df) > 0:
         df = df[df["cell_id"] == cell_id]
@@ -171,7 +168,7 @@ def get_lab_results(cell_id: Optional[int] = None) -> pd.DataFrame:
 
 
 def get_watch_list(species: Optional[str] = None) -> pd.DataFrame:
-    """Watch list (ML önerileri)."""
+    """Watch list (ML recommendations)."""
     df = read_sheet("watch_list")
     if species and "species" in df.columns and len(df) > 0:
         df = df[df["species"] == species]
@@ -179,23 +176,18 @@ def get_watch_list(species: Optional[str] = None) -> pd.DataFrame:
 
 
 def update_cells_proba(species: str, proba_array: list[float]):
-    """Tüm hücrelerin proba'sını güncelle (species='culex' veya 'aedes')."""
+    """Update all cells' probability (species='culex' or 'aedes')."""
     df = get_cells()
     if len(df) == 0:
         return
     col = f"{species}_proba"
     if col not in df.columns:
-        st.warning(f"⚠️ '{col}' kolonu cells sheet'inde yok")
+        st.warning(f"Column '{col}' missing in cells sheet")
         return
     df[col] = proba_array[:len(df)]
     df["last_updated"] = datetime.now().strftime("%Y-%m-%d")
-
-    # Confidence tier ata
     df["confidence_tier"] = df[col].apply(_proba_to_tier)
-
-    # Sheet'e yaz (header korunur, 2. satırdan itibaren)
     update_dataframe("cells", df)
-    # st.success(f"✅ {len(df)} hücre güncellendi ({species})")
 
 
 def _proba_to_tier(p: float) -> str:
@@ -210,15 +202,15 @@ def _proba_to_tier(p: float) -> str:
     return "unknown"
 
 
-# ============== AUTH (basit şifre) ==============
+# ============== AUTH ==============
 
 def hash_password(password: str) -> str:
-    """SHA256 hash (basit, salt yok - POC için yeterli)."""
+    """SHA256 hash (no salt — POC only)."""
     return hashlib.sha256(password.encode()).hexdigest()
 
 
 def verify_user(username: str, password: str) -> Optional[str]:
-    """Kullanıcı doğrula, rolü döner. None = başarısız."""
+    """Verify user, return role. None = failure."""
     users = _load_users()
     if username not in users:
         return None
@@ -230,7 +222,7 @@ def verify_user(username: str, password: str) -> Optional[str]:
 
 @st.cache_data(ttl=300)
 def _load_users() -> dict:
-    """Users sheet'ini yükle. Yoksa default'ları yaz."""
+    """Load users sheet, write defaults on first run."""
     try:
         df = read_sheet("users", dtype_fix=False)
     except Exception:
@@ -244,7 +236,6 @@ def _load_users() -> dict:
             r = str(row.get("role", "viewer"))
             users[u] = (h, r)
     else:
-        # İlk açılışta default'ları yaz
         rows = []
         for u, (pw, role) in DEFAULT_USERS.items():
             rows.append({
@@ -261,7 +252,7 @@ def _load_users() -> dict:
 
 
 def update_last_login(username: str):
-    """Son giriş zamanını güncelle."""
+    """Update last login time."""
     df = read_sheet("users", dtype_fix=False)
     if len(df) == 0:
         return
@@ -278,7 +269,7 @@ def update_last_login(username: str):
 # ============== UTIL ==============
 
 def sheet_health_check() -> dict:
-    """Tüm sheet'lerin var olup olmadığını kontrol et."""
+    """Check all sheets exist."""
     gc = get_gspread_client()
     sh = get_spreadsheet()
     status = {}

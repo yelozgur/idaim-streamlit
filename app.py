@@ -1,12 +1,14 @@
 """app.py — IDAIM Streamlit landing page.
 
-4 sayfa:
-  1. 📥 Veri Girişi (Sampling Initiation / Trap Check / Lab Result)
-  2. 🗺️ Dashboard (Folium harita + watch list)
-  3. 🤖 ML Retrain (per-species, per-district threshold)
-  4. 📊 Raporlar (validation metrics)
+Pages (visible to all authenticated users):
+  1. Data Entry (Sampling Initiation / Trap Check / Lab Result)
+  2. Dashboard (map + watch list)
+  3. Reports (charts + statistics)
 
-Auth: basit şifre (Sheets'te users sheet).
+Admin-only page:
+  4. Admin (training metrics, Sheets health, user management)
+
+Auth: username + password (users sheet).
 """
 import streamlit as st
 from datetime import datetime
@@ -28,18 +30,18 @@ st.set_page_config(
 # ============== AUTH ==============
 
 def login_page():
-    """Basit şifre girişi."""
+    """Username + password login."""
     st.title(f"{config.APP_ICON} {config.APP_TITLE}")
-    st.markdown("**Kıbrıs Sivrisinek Vektör İzleme Sistemi** | UNDP-CH")
+    st.markdown("**Cyprus Mosquito Vector Surveillance System** | UNDP-CH")
     st.markdown("---")
 
     with st.form("login_form"):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.subheader("🔐 Giriş")
-            username = st.text_input("Kullanıcı adı")
-            password = st.text_input("Şifre", type="password")
-            submit = st.form_submit_button("Giriş Yap", use_container_width=True)
+            st.subheader("Sign In")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Sign In", use_container_width=True)
 
     if submit:
         role = sheets_client.verify_user(username, password)
@@ -48,30 +50,31 @@ def login_page():
             st.session_state["username"] = username
             st.session_state["role"] = role
             sheets_client.update_last_login(username)
-            st.success(f"✅ Hoş geldin, {username} (rol: {role})")
+            st.success(f"Welcome, {username} (role: {role})")
             st.rerun()
         else:
-            st.error("❌ Kullanıcı adı veya şifre yanlış")
+            st.error("Invalid username or password")
 
-    with st.expander("ℹ️ İlk kez mi giriyorsun?"):
+    with st.expander("First time here?"):
         st.markdown("""
-        **Default kullanıcılar (ilk açılışta `users` sheet'ine yazılır):**
-        | Kullanıcı | Şifre | Rol |
-        |---|---|---|
-        | `admin` | `idaim2026` | Admin (her şey) |
-        | `field` | `field2026` | Saha ekibi (trap kur/kapat) |
-        | `lab` | `lab2026` | Lab teknisyeni (lab sonuç) |
+        **Default users (auto-created on first run in the `users` sheet):**
 
-        **Önemli:** İlk girişten sonra şifreleri değiştirin!
+        | Username | Password | Role |
+        |---|---|---|
+        | `admin` | `idaim2026` | Admin (sees everything) |
+        | `field` | `field2026` | Field team (trap setup) |
+        | `lab` | `lab2026` | Lab technician (lab results) |
+
+        **Important:** Change passwords after first login.
         """)
 
 
 def logout_button():
-    """Sidebar'da çıkış butonu."""
+    """Logout button in the sidebar."""
     with st.sidebar:
         st.markdown("---")
-        st.markdown(f"**👤 {st.session_state.get('username', '?')}** ({st.session_state.get('role', '?')})")
-        if st.button("🚪 Çıkış Yap", use_container_width=True):
+        st.markdown(f"**{st.session_state.get('username', '?')}** ({st.session_state.get('role', '?')})")
+        if st.button("Sign Out", use_container_width=True):
             for k in ["authenticated", "username", "role"]:
                 st.session_state.pop(k, None)
             st.rerun()
@@ -80,87 +83,83 @@ def logout_button():
 # ============== MAIN APP ==============
 
 def main():
-    # Auth check
     if not st.session_state.get("authenticated", False):
         login_page()
         return
 
     logout_button()
 
-    # Sidebar — sheets health
+    # Sidebar header
     with st.sidebar:
         st.title(f"{config.APP_ICON} IDAIM Cyprus")
-        st.caption(f"v0.5.0 | {datetime.now().strftime('%Y-%m-%d')}")
+        st.caption(f"v0.6.0 | {datetime.now().strftime('%Y-%m-%d')}")
 
-        with st.expander("📊 Sheets Durumu", expanded=False):
+        with st.expander("Sheets Status", expanded=False):
             try:
                 status = sheets_client.sheet_health_check()
                 for key, info in status.items():
-                    icon = "✅" if info["exists"] else "❌"
-                    st.caption(f"{icon} **{key}**: {info['rows']} satır")
+                    icon = "OK" if info["exists"] else "MISSING"
+                    st.caption(f"{icon} **{key}**: {info['rows']} rows")
             except Exception as e:
-                st.error(f"Health check hata: {e}")
+                st.error(f"Health check error: {e}")
 
     # Landing
     st.title(f"{config.APP_ICON} {config.APP_TITLE}")
-    st.markdown(f"""
-    **Müşteri:** UNDP Cyprus (UNDP-CH)
-    **Amaç:** Kıbrıs'ta sivrisinek üreme alanlarını remote sensing + ML ile haritalama
-    **ML modeli:** MiniRocket (5 GEE dynamic × 12 months)
-    **Veri:** Google Sheets (gerçek zamanlı)
-    """)
-
+    st.markdown("**Cyprus mosquito vector surveillance** | UNDP-CH")
     st.markdown("---")
 
-    # Hızlı istatistikler
-    st.subheader("📊 Hızlı Bakış")
+    # Quick stats
+    st.subheader("Overview")
     try:
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             cells = sheets_client.get_cells()
-            st.metric("🗺️ Toplam Hücre", len(cells))
+            st.metric("Grid Cells", len(cells))
 
         with col2:
             inits = sheets_client.get_sampling_initiations(active_only=False)
-            st.metric("🪤 Trap Kurulmuş", len(inits))
+            st.metric("Traps Installed", len(inits))
 
         with col3:
             lab = sheets_client.get_lab_results()
-            st.metric("🧪 Lab Sonucu", len(lab))
+            st.metric("Lab Results", len(lab))
 
         with col4:
             watch = sheets_client.get_watch_list()
-            st.metric("👀 Watch List", len(watch))
+            st.metric("Watch List", len(watch))
 
     except Exception as e:
-        st.error(f"Veri yüklenemedi: {e}")
+        st.error(f"Data load error: {e}")
 
     st.markdown("---")
 
-    # Navigasyon
-    st.subheader("🧭 Navigasyon")
-    st.markdown("""
-    Sol menüden sayfa seçin veya aşağıdaki kartlardan birini tıklayın:
+    # Navigation
+    role = st.session_state.get("role", "")
+    is_admin = role == "admin"
 
-    | Sayfa | Ne Yapar |
-    |---|---|
-    | 📥 **Veri Girişi** | Trap kurulumu, saha kontrolü, lab sonucu |
-    | 🗺️ **Dashboard** | 642 hücre harita, watch list, trap durumu |
-    | 🤖 **ML Retrain** | Per-species model eğit + tüm hücreleri predict et |
-    | 📊 **Raporlar** | Validation metrikleri, per-district Kappa, trend |
-    """)
+    st.subheader("Navigation")
+    if is_admin:
+        st.markdown("""
+        Use the left menu or jump to a page:
 
-    st.info("""
-    💡 **İlk kez mi kullanıyorsun?**
-    1. `SHEETS_HEADERS.md`'i oku, 7 sheet'i oluştur
-    2. Streamlit Cloud → Settings → Secrets'e gcp_service_account + spreadsheet id ekle
-    3. `cells` sheet'ine 642 hücrenin koordinatlarını yükle (mevcut GeoPackage'tan export)
-    4. Sol menüden **Veri Girişi** → ilk trap'ı kur
-    5. **ML Retrain** → Culex modeli eğit, watch list oluştur
-    6. **Dashboard** → haritadan takip et
-    7. **Raporlar** → metrikleri gör
-    """)
+        | Page | Purpose |
+        |---|---|
+        | **Data Entry** | Trap setup, field checks, lab results |
+        | **Dashboard** | Map, watch list, trap status |
+        | **Reports** | Validation metrics, district stats, trends |
+        | **Admin** | Training metrics, Sheets health, user management (admin only) |
+        """)
+    else:
+        st.markdown("""
+        Use the left menu or jump to a page:
+
+        | Page | Purpose |
+        |---|---|
+        | **Data Entry** | Trap setup, field checks, lab results |
+        | **Dashboard** | Map, watch list, trap status |
+        | **Reports** | Charts and statistics |
+        """)
 
 
 if __name__ == "__main__":

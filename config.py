@@ -1,13 +1,11 @@
-"""config.py — Streamlit app için sabitler ve path'ler.
+"""config.py — Streamlit app constants and paths.
 
-Sheets ID ve sayfa adları burada. Sheet adlarını birebir aynı kullan
-(SHEETS_HEADERS.md ile uyumlu).
+Sheet names live here. Sheet names must match SHEETS_HEADERS.md exactly.
 """
 from pathlib import Path
 
-# ============== Sheets Yapısı ==============
-# Streamlit secrets'tan okunur, yoksa default
-SPREADSHEET_ID = "BURAYA_SHEET_ID"  # secrets.toml'dan gelecek
+# ============== Sheets ==============
+SPREADSHEET_ID = "SET_VIA_STREAMLIT_SECRETS"  # secrets.toml
 
 SHEET_NAMES = {
     "cells": "cells",
@@ -19,30 +17,29 @@ SHEET_NAMES = {
     "users": "users",
 }
 
-# ============== Google Drive (fotoğraflar için) ==============
-DRIVE_ROOT_FOLDER = "IDAIM-Cyprus-Photos"  # Drive'da bu klasör oluşmalı
+# ============== Google Drive (photos) ==============
+DRIVE_ROOT_FOLDER = "IDAIM-Cyprus-Photos"
 DRIVE_SUBFOLDERS = {
     "sampling_initiation": "sampling",
     "trap_checks": "checks",
     "lab_results": "lab",
 }
 
-# ============== District'ler (Cyprus) ==============
+# ============== Districts (Cyprus) ==============
 DISTRICTS = ["Keryneia", "Nicosia", "Famagusta", "Larnaca", "Limassol", "Paphos"]
 
-# ============== ML Sabitleri ==============
+# ============== ML Constants ==============
 DYNAMIC_FEATURES = ["LST", "NDVI", "Humidity", "Precip", "WindSpeed"]
 ALPHAEARTH_YEAR = 2024
-MINIROCKET_INPUT_SHAPE = (5, 12)  # 5 features × 12 months
 
-# Threshold stratejileri
+# Threshold strategies
 THRESHOLD_STRATEGIES = {
     "global": 0.10,
-    "per_district": None,  # ablation_hybrid.json'dan yüklenecek
+    "per_district": None,
     "custom_default": 0.10,
 }
 
-# Per-species minimum sample
+# Per-species minimum sample for training
 MIN_SAMPLES = {
     "culex": 5,
     "aedes": 1,
@@ -52,13 +49,13 @@ MIN_SAMPLES = {
 APP_TITLE = "IDAIM Cyprus — Vector Surveillance"
 APP_ICON = "🦟"
 
-# ============== Auth (basit şifre) ==============
+# ============== Auth (default users) ==============
+# username: (password_plain, role)
 DEFAULT_USERS = {
-    # username: (password_plain, role) — ilk açılışta hash'lenir
     "admin": ("idaim2026", "admin"),
     "field": ("field2026", "field"),
     "lab": ("lab2026", "lab"),
 }
 
 # ============== Cache ==============
-CACHE_TTL_DAYS = 30  # features_cache 30 gün sonra tazele
+CACHE_TTL_DAYS = 30
