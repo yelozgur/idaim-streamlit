@@ -1,138 +1,26 @@
 """utils.py — Tüm sayfalar için ortak helper'lar.
 
 Cache'li veri yükleme, renk skalası, format helper'ları.
-
-VERİ KAYNAĞI STRATEJİSİ (v0.6):
-- cells_full.parquet → statik bundle, lokalden oku (37K hücre, 2MB)
-- features_cache_active.parquet → aylık güncellenen GEE cache, lokalden oku
-- ml_output (Sheets) → sadece yazma için, ML prediction sonuçları
-- Sheets (sampling, trap_checks, lab_results, watch_list) → dinamik veri
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
-from pathlib import Path
 from typing import Optional
 
 import sheets_client
 from config import DISTRICTS
 
 
-# ============== PATHS ==============
-
-STREAMLIT_DIR = Path(__file__).parent
-DATA_DIR = STREAMLIT_DIR / "data"
-CELLS_PARQUET = DATA_DIR / "cells_full.parquet"
-FEATURES_PARQUET = DATA_DIR / "features_cache_active.parquet"
-
-
-# ============== STATIK VERİ YÜKLEME (PARQUET) ==============
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_static_cells() -> pd.DataFrame:
-    """cells_full.parquet'tan statik hücre verisi (37K hücre, ~2MB).
-
-    Streamlit Cloud bundle içinde. ASLA değişmez.
-    """
-    if not CELLS_PARQUET.exists():
-        st.error(f"❌ Statik cells dosyası yok: {CELLS_PARQUET}")
-        st.info("💡 `python scripts/build_cells_parquet.py` ile üret")
-        return pd.DataFrame()
-    df = pd.read_parquet(CELLS_PARQUET)
-    # dtype düzeltme
-    df["cell_id"] = pd.to_numeric(df["cell_id"], errors="coerce").astype("Int64")
-    return df
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_static_features() -> pd.DataFrame:
-    """features_cache_active.parquet'tan GEE feature'ları.
-
-    Aylık lokalde güncellenir, Streamlit Cloud bundle'a replace edilir.
-    Yoksa boş DataFrame döner (ML predict yapılamaz).
-    """
-    if not FEATURES_PARQUET.exists():
-        st.warning(
-            "⚠️ features_cache_active.parquet bulunamadı. "
-            "ML predict için önce `python scripts/fetch_gee_features.py --initial` çalıştır."
-        )
-        return pd.DataFrame()
-    df = pd.read_parquet(FEATURES_PARQUET)
-    df["cell_id"] = pd.to_numeric(df["cell_id"], errors="coerce").astype("Int64")
-    return df
-
-
-def has_static_features() -> bool:
-    """Feature cache hazır mı?"""
-    return FEATURES_PARQUET.exists()
-
-
-# ============== ML OUTPUT (SHEETS) ==============
-
-@st.cache_data(ttl=300, show_spinner=False)
-def load_ml_output() -> pd.DataFrame:
-    """Sheets'ten sadece ML output (proba + tier).
-
-    cells sheet'inin TAMAMINI çekmiyoruz, sadece ML kolonlarını alıyoruz.
-    """
-    try:
-        df = sheets_client.get_cells()
-    except Exception as e:
-        st.warning(f"ML output yüklenemedi: {e}")
-        return pd.DataFrame()
-    if len(df) == 0:
-        return df
-    # Sadece gerekli kolonlar
-    keep = ["cell_id"]
-    for c in ["culex_proba", "aedes_proba", "confidence_tier", "last_updated"]:
-        if c in df.columns:
-            keep.append(c)
-    return df[keep].copy()
-
-
-def update_ml_output(species: str, proba_map: dict[int, float]):
-    """Sheets'teki cells sheet'inin ML kolonlarını güncelle."""
-    cells_full = sheets_client.read_sheet("cells")
-    if len(cells_full) == 0:
-        return
-    col = f"{species}_proba"
-    if col not in cells_full.columns:
-        return
-    cells_full[col] = cells_full["cell_id"].map(
-        lambda c: float(proba_map.get(int(c), np.nan))
-    )
-    from utils import _proba_to_tier, clear_all_caches
-    cells_full["confidence_tier"] = cells_full[col].apply(_proba_to_tier)
-    cells_full["last_updated"] = pd.Timestamp.now().strftime("%Y-%m-%d")
-    sheets_client.update_dataframe("cells", cells_full)
-    clear_all_caches()
-
-
-# ============== MERGE: CELLS + FEATURES + ML OUTPUT ==============
-
-@st.cache_data(ttl=300, show_spinner=False)
-def load_merged_cells() -> pd.DataFrame:
-    """Statik cells + ML output birleşik (parquet + Sheets)."""
-    cells = load_static_cells()
-    if len(cells) == 0:
-        return cells
-    ml = load_ml_output()
-    if len(ml) > 0:
-        # Sadece ML output kolonlarını birleştir
-        ml_cols = [c for c in ml.columns if c in ["cell_id", "culex_proba", "aedes_proba", "confidence_tier", "last_updated"]]
-        cells = cells.merge(ml[ml_cols], on="cell_id", how="left", suffixes=("", "_ml"))
-    return cells
-
-
-# ============== ESKİ SHEETS'TEN OKUMA (geriye uyumluluk) ==============
+# ============== CACHE'Lİ VERİ YÜKLEME ==============
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_cells() -> pd.DataFrame:
-    """DEPRECATED: load_static_cells() veya load_merged_cells() kullan.
-
-    Geriye uyumluluk için Sheets'ten okur.
-    """
-    return load_merged_cells()
+    """Tüm 642 hücre (cache 5dk)."""
+    try:
+        return sheets_client.get_cells()
+    except Exception as e:
+        st.error(f"Hücreler yüklenemedi: {e}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -305,85 +193,6 @@ def fmt_count(n) -> str:
     return f"{int(n)}"
 
 
-def safe_cell_id(v) -> str:
-    """Cell_id'yi güvenli string'e çevir (Int64, None, NaN korumalı)."""
-    try:
-        if pd.isna(v):
-            return "?"
-        return str(int(float(v)))
-    except (ValueError, TypeError):
-        return "?"
-
-
-def parse_folium_bounds(bounds) -> tuple:
-    """st_folium'un döndürdüğü bounds'u (south, west, north, east) tuple'a çevir.
-
-    Desteklenen formatlar:
-    - None veya boş: (None, None, None, None)
-    - [[south, west], [north, east]] (eski)
-    - [[lat, lng], [lat, lng]] (alternatif liste)
-    - {"_southWest": {"lat": s, "lng": w}, "_northEast": {"lat": n, "lng": e}} (Leaflet)
-    - {"south": s, "west": w, "north": n, "east": e} (özel)
-    - Dict of bounds with any keys
-
-    Returns:
-        (south, west, north, east) — başarısızsa hepsi None
-    """
-    if not bounds:
-        return (None, None, None, None)
-
-    try:
-        # Format 1: [[south, west], [north, east]] veya [[lat, lng], [lat, lng]]
-        if isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
-            first, second = bounds[0], bounds[1]
-            if isinstance(first, (list, tuple)) and isinstance(second, (list, tuple)):
-                # [lat, lng] sırası varsayımı
-                if len(first) >= 2 and len(second) >= 2:
-                    # İlk değer küçükse → south/west, büyükse north/east
-                    lat1, lng1 = float(first[0]), float(first[1])
-                    lat2, lng2 = float(second[0]), float(second[1])
-                    south, north = min(lat1, lat2), max(lat1, lat2)
-                    west, east = min(lng1, lng2), max(lng1, lng2)
-                    return (south, west, north, east)
-
-        # Format 2: Leaflet dict
-        if isinstance(bounds, dict):
-            # _southWest / _northEast
-            sw = bounds.get("_southWest") or bounds.get("southWest")
-            ne = bounds.get("_northEast") or bounds.get("northEast")
-            if sw and ne and isinstance(sw, dict) and isinstance(ne, dict):
-                south = float(sw.get("lat", 0))
-                west = float(sw.get("lng", 0))
-                north = float(ne.get("lat", 0))
-                east = float(ne.get("lng", 0))
-                return (south, west, north, east)
-
-            # south/west/north/east direkt
-            if all(k in bounds for k in ("south", "west", "north", "east")):
-                return (
-                    float(bounds["south"]),
-                    float(bounds["west"]),
-                    float(bounds["north"]),
-                    float(bounds["east"]),
-                )
-
-            # Tek dict: {lat_min, lat_max, lng_min, lng_max} benzeri
-            for k_lat in ("lat_min", "south"):
-                for k_lng in ("lng_min", "west"):
-                    if k_lat in bounds and k_lng in bounds:
-                        return (
-                            float(bounds[k_lat]),
-                            float(bounds[k_lng]),
-                            float(bounds.get("lat_max", bounds.get("north", 0))),
-                            float(bounds.get("lng_max", bounds.get("east", 0))),
-                        )
-
-        # Hiçbir format tanınmadı
-        return (None, None, None, None)
-    except Exception:
-        return (None, None, None, None)
-
-
 def safe_int(v, default=0) -> int:
     """Güvenli int çevirme (None/NaN korumalı)."""
     try:
@@ -392,23 +201,6 @@ def safe_int(v, default=0) -> int:
         return int(v)
     except (ValueError, TypeError):
         return default
-
-
-def _proba_to_tier(p) -> str:
-    """ML olasılığını confidence tier'a çevir."""
-    if pd.isna(p):
-        return "unknown"
-    try:
-        p = float(p)
-    except (ValueError, TypeError):
-        return "unknown"
-    if p >= 0.7:
-        return "high"
-    if p >= 0.4:
-        return "medium"
-    if p >= 0.2:
-        return "low"
-    return "unknown"
 
 
 # ============== METRICS ==============

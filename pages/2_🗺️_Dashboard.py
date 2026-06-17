@@ -1,19 +1,16 @@
 """2_🗺️_Dashboard.py — Operasyonel dashboard.
 
-- Folium harita (ücretsiz OSM) — 37K hücre + trap'ler + lab sonuçları
+- Folium harita: 642 hücre (proba heatmap), trap markers, lab markers
 - Watch list paneli (sağda)
 - Filtreler: tür, confidence, district
 - Toplu trap kur (watch list'ten seçili → Sayfa 1'e prefill)
-
-Not: Plotly scatter_map kaldırıldı (Marker API 5.18+ değişti, hata veriyor).
-Sadece Folium harita — interaktif, OSM ücretsiz, sandboxing-safe.
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
-# Plotly import'ları KALDIRILDI (Marker API 5.18+ uyumsuz, gereksiz)
-# import plotly.express as px
-# import plotly.graph_objects as go
+from streamlit_folium import st_folium
+import folium
+from folium.plugins import HeatMap, MarkerCluster
 
 import sys
 from pathlib import Path
@@ -23,11 +20,10 @@ import config
 import mobile_styles
 import utils
 from utils import (
-    load_merged_cells as load_cells,
-    load_sampling_initiations, load_trap_checks, load_lab_results,
+    load_cells, load_sampling_initiations, load_trap_checks, load_lab_results,
     load_watch_list, load_traps_with_state, load_labeled_cells,
-    fmt_proba, fmt_count, safe_cell_id, compute_trap_counts, compute_label_counts,
     proba_to_color, state_to_color, status_to_color, species_to_color,
+    fmt_proba, fmt_count, compute_trap_counts, compute_label_counts,
     clear_all_caches,
 )
 
@@ -144,142 +140,144 @@ if len(cells) > 0 and confidence_filter != "Tümü":
         cells = cells[pd.to_numeric(cells[col], errors="coerce").isna()]
 
 
-
-# ============== PLOTLY HARİTA (WebGL — Folium yerine, 100x hızlı) ==============
-
+# Folium harita oluştur
 if len(cells) == 0:
     st.warning("Filtreler sonrası gösterilecek hücre kalmadı. Filtreleri gevşet.")
     st.stop()
 
-# Proba parse
-if species_filter == "Culex (proba)":
-    proba_col = "culex_proba"
-elif species_filter == "Aedes (proba)":
-    proba_col = "aedes_proba"
-else:
-    proba_col = "culex_proba"  # lab modu
-
-cells_view = cells.copy()
-cells_view[proba_col] = pd.to_numeric(cells_view[proba_col], errors="coerce")
-cells_view["cv_cell_id_str"] = cells_view["cell_id"].apply(safe_cell_id)
-
-# Hover text hazırla
-cells_view["hover_text"] = cells_view.apply(
-    lambda r: (
-        f"<b>Hücre #{r['cv_cell_id_str']}</b><br>"
-        f"District: {r.get('district', '?')}<br>"
-        f"Lat/Lon: {r['lat']:.4f}, {r['lon']:.4f}<br>"
-        f"Culex: {fmt_proba(r.get('culex_proba'))}<br>"
-        f"Aedes: {fmt_proba(r.get('aedes_proba'))}<br>"
-        f"Confidence: {r.get('confidence_tier', '?')}"
-    ),
-    axis=1
+# Cyprus merkez
+m = folium.Map(
+    location=[34.9, 33.2],
+    zoom_start=9,
+    tiles="OpenStreetMap",
+    control_scale=True,
 )
 
-# ============== FOLIUM HARİTA (ücretsiz OSM, çalışıyor) ==============
-import folium
-from streamlit_folium import st_folium
+# Hangi kolon kullanılacak
+proba_col = "culex_proba" if "Culex" in species_filter else (
+    "aedes_proba" if "Aedes" in species_filter else "culex_proba"
+)
 
-m = folium.Map(location=[34.9, 33.2], zoom_start=9, tiles="OpenStreetMap", control_scale=True)
+# Hücreler (CircleMarker)
+cells_layer = folium.FeatureGroup(name="Hücreler", show=True)
+for _, row in cells.iterrows():
+    proba = pd.to_numeric(row.get(proba_col), errors="coerce")
+    color = proba_to_color(proba, threshold=0.10)
 
-# Hücreler (CircleMarker — renk proba'ya göre)
-# NOT (2026-06-17): Hücre sayısı > 5000 ise sadece yüksek proba (≥0.3) hücreleri göster,
-# default kapalı (performans için). Kullanıcı layer control'den açarsa tümü görünür.
-n_cells = len(cells_view)
-if n_cells > 5000:
-    # Çok fazla hücre — sadece yüksek proba olanları pinle, layer default kapalı
-    high_proba = cells_view[cells_view[proba_col].fillna(0) >= 0.3].copy()
-    st.caption(f"⚠️ {n_cells} hücre var (yavaş). Default: sadece {len(high_proba)} yüksek proba (≥0.3) gösteriliyor. Tümü için layer'ı açın.")
-    cells_layer = folium.FeatureGroup(name=f"🗺️ Yüksek proba hücreler ({len(high_proba)})", show=True)
-    cells_to_render = high_proba
-else:
-    cells_layer = folium.FeatureGroup(name=f"🗺️ Hücreler ({n_cells})", show=True)
-    cells_to_render = cells_view
+    popup_html = f"""
+    <b>Hücre #{int(row['cell_id'])}</b><br>
+    District: {row.get('district', '?')}<br>
+    Lat/Lon: {row['lat']:.4f}, {row['lon']:.4f}<br>
+    <hr>
+    <b>Culex proba:</b> {fmt_proba(row.get('culex_proba'))}<br>
+    <b>Aedes proba:</b> {fmt_proba(row.get('aedes_proba'))}<br>
+    <b>Confidence:</b> {row.get('confidence_tier', '?')}<br>
+    <b>Son güncelleme:</b> {row.get('last_updated', '?')}
+    """
 
-# Vectorized renk ataması (iterrows yerine — 10x hız)
-def _color_for(p):
-    if p >= 0.7: return "#7f0000"
-    if p >= 0.5: return "#d32f2f"
-    if p >= 0.3: return "#f57c00"
-    if p >= 0.1: return "#fbc02d"
-    return "#bbdefb"
-
-proba_arr = pd.to_numeric(cells_to_render[proba_col], errors="coerce").fillna(0).values
-color_arr = [_color_for(p) for p in proba_arr]
-lats = cells_to_render["lat"].values
-lons = cells_to_render["lon"].values
-hovers = cells_to_render["hover_text"].values
-cell_id_strs = cells_to_render["cv_cell_id_str"].values
-
-for lat, lon, color, hover, cid in zip(lats, lons, color_arr, hovers, cell_id_strs):
     folium.CircleMarker(
-        [lat, lon], radius=4,
-        popup=folium.Popup(hover, max_width=300),
-        tooltip=f"#{cid}",
-        color=color, fill=True, fill_color=color, fill_opacity=0.6, weight=1,
+        location=[row["lat"], row["lon"]],
+        radius=6,
+        popup=folium.Popup(popup_html, max_width=300),
+        tooltip=f"#{int(row['cell_id'])} | {row.get('district', '?')} | {fmt_proba(proba)}",
+        color=color,
+        fill=True,
+        fill_color=color,
+        fill_opacity=0.6,
+        weight=1,
     ).add_to(cells_layer)
 cells_layer.add_to(m)
 
-# Trap'ler
-if show_traps and len(traps_df) > 0:
-    trap_view = traps_df.dropna(subset=["lat", "lon"]).copy()
-    if len(trap_view) > 0:
-        trap_view["color"] = trap_view.apply(
-            lambda r: status_to_color(r.get("last_check")) if pd.notna(r.get("last_check"))
-            else state_to_color(r.get("state", "active")),
-            axis=1,
-        )
-        traps_layer = folium.FeatureGroup(name="🪤 Trap'ler", show=True)
-        for _, tr in trap_view.iterrows():
-            hover = (
-                f"<b>🪤 {tr['trap_id']}</b><br>"
-                f"Cell: #{safe_cell_id(tr.get('cell_id'))}<br>"
-                f"Operator: {tr.get('operator', '?')}<br>"
-                f"State: {tr.get('state', '?')}<br>"
-                f"Son check: {tr.get('last_check', '—')}"
-            )
-            folium.Marker(
-                [tr["lat"], tr["lon"]],
-                popup=folium.Popup(hover, max_width=300),
-                tooltip=f"🪤 {tr['trap_id']} ({tr.get('last_check', tr.get('state', '?'))})",
-                icon=folium.Icon(color="orange", icon="bug", prefix="fa"),
-            ).add_to(traps_layer)
-        traps_layer.add_to(m)
 
-# Lab sonuçları
+# Trap markers
+if show_traps and len(traps_df) > 0:
+    traps_layer = folium.FeatureGroup(name="🪤 Trap'ler", show=True)
+    for _, row in traps_df.iterrows():
+        if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
+            continue
+
+        # Renk: state veya son check durumu
+        if pd.notna(row.get("last_check")):
+            color = status_to_color(row["last_check"])
+        else:
+            color = state_to_color(row.get("state", "active"))
+
+        popup_html = f"""
+        <b>Trap {row['trap_id']}</b><br>
+        Hücre: #{int(row['cell_id'])} ({row.get('district', '?')})<br>
+        Operator: {row.get('operator', '?')}<br>
+        Method: {row.get('sampling_method', '?')}<br>
+        State: {row.get('state', '?')}<br>
+        <hr>
+        <b>Son check:</b> {row.get('last_check', '—')}<br>
+        <b>Check zamanı:</b> {row.get('last_check_time', '—')}<br>
+        <b>Check sayısı:</b> {fmt_count(row.get('n_checks'))}
+        """
+
+        # Icon tipi
+        icon = "circle" if row.get("state") == "active" else "circle"
+        folium.Marker(
+            location=[row["lat"], row["lon"]],
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=f"{row['trap_id']} ({row.get('last_check', row.get('state', '?'))})",
+            icon=folium.Icon(color=color.split("#")[0] if not color.startswith("#") else "blue",
+                            icon_color=color, icon="bug", prefix="fa"),
+        ).add_to(traps_layer)
+    traps_layer.add_to(m)
+
+
+# Lab markers
 if show_labs and len(labs_df) > 0:
-    lab_view = labs_df.merge(
-        cells_view[["cell_id", "lat", "lon"]].rename(columns={"cell_id": "cell_id_lab"}),
-        left_on="cell_id", right_on="cell_id_lab", how="left",
-    ).dropna(subset=["lat", "lon"])
-    if len(lab_view) > 0:
-        lab_view["color"] = lab_view["species"].apply(species_to_color)
-        labs_layer = folium.FeatureGroup(name="🧪 Lab", show=True)
-        for _, lb in lab_view.iterrows():
-            hover = (
-                f"<b>🧪 {lb.get('species', '?')}</b> ×{fmt_count(lb.get('count'))}<br>"
-                f"Trap: {lb.get('trap_id', '?')}<br>"
-                f"Confidence: {lb.get('lab_confidence', '?')}"
-            )
-            sp_short = lb.get('species', '?')[:1]
-            folium.Marker(
-                [lb["lat"], lb["lon"]],
-                popup=folium.Popup(hover, max_width=300),
-                tooltip=f"{sp_short}×{fmt_count(lb.get('count'))}",
-                icon=folium.DivIcon(
-                    html=f'<div style="background:{lb["color"]};color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3)">{sp_short}</div>',
-                    icon_size=(24, 24), icon_anchor=(12, 12),
-                ),
-            ).add_to(labs_layer)
-        labs_layer.add_to(m)
+    labs_layer = folium.FeatureGroup(name="🧪 Lab Sonuçları", show=True)
+    for _, row in labs_df.iterrows():
+        # Cell bilgisi
+        cell = cells[cells["cell_id"] == row["cell_id"]]
+        if len(cell) == 0:
+            continue
+        lat, lon = cell.iloc[0]["lat"], cell.iloc[0]["lon"]
+
+        color = species_to_color(row.get("species", "Other"))
+        species_short = row.get("species", "?")[:1]  # C / A / M / O / N
+
+        popup_html = f"""
+        <b>Lab — {row['lab_id']}</b><br>
+        Trap: {row['trap_id']}<br>
+        Hücre: #{int(row['cell_id'])}<br>
+        <hr>
+        <b>Tür:</b> {row.get('species', '?')}<br>
+        <b>Birey:</b> {fmt_count(row.get('count'))}<br>
+        <b>Lifecycle:</b> {row.get('specimen_lifecycle', '?')}<br>
+        <b>Method:</b> {row.get('identification_method', '?')}<br>
+        <b>Confidence:</b> {row.get('lab_confidence', '?')}<br>
+        <b>Tarih:</b> {row.get('lab_date', '?')}<br>
+        <b>Operator:</b> {row.get('lab_operator', '?')}
+        """
+
+        folium.Marker(
+            location=[lat, lon],
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=f"{row.get('species', '?')} ×{fmt_count(row.get('count'))}",
+            icon=folium.DivIcon(
+                html=f'<div style="background:{color};color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3)">{species_short}</div>',
+                icon_size=(24, 24),
+                icon_anchor=(12, 12),
+            ),
+        ).add_to(labs_layer)
+    labs_layer.add_to(m)
+
 
 # Layer control
 folium.LayerControl(collapsed=False).add_to(m)
 
-# Render
-st_folium(m, height=550, returned_objects=[], key="dashboard_folium_map")
 
-st.caption(f"📊 Toplam: {len(cells_view):,} hücre (Folium + OSM tile)")
+# Haritayı göster
+map_data = st_folium(
+    m,
+    height=550,
+    returned_objects=["last_clicked"],
+    key="dashboard_map",
+    use_container_width=True,
+)
 
 
 # ============== WATCH LIST ==============

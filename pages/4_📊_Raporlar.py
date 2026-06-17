@@ -12,7 +12,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.express as px
-import plotly.graph_objects as go  # noqa: F401  # Plotly 5.18+ Marker API değişti
+import plotly.graph_objects as go
 
 import sys
 from pathlib import Path
@@ -22,10 +22,10 @@ import config
 import mobile_styles
 import utils
 from utils import (
-    load_merged_cells as load_cells,
-    load_sampling_initiations, load_trap_checks, load_lab_results,
+    load_cells, load_sampling_initiations, load_trap_checks, load_lab_results,
     load_watch_list, load_traps_with_state, load_labeled_cells,
-    fmt_proba, fmt_count, safe_cell_id, species_to_color, status_to_color,
+    fmt_proba, fmt_count, compute_label_counts, compute_trap_counts,
+    species_to_color, status_to_color,
 )
 
 
@@ -279,7 +279,7 @@ with col_act1:
         recent_init["sampling_start_time"] = pd.to_datetime(recent_init["sampling_start_time"], errors="coerce")
         recent_init = recent_init.sort_values("sampling_start_time", ascending=False).head(5)
         for _, row in recent_init.iterrows():
-            st.caption(f"• {row['trap_id']} — cell #{utils.safe_cell_id(row['cell_id'])} ({row['operator']})")
+            st.caption(f"• {row['trap_id']} — cell #{int(row['cell_id']) if pd.notna(row['cell_id']) else '?'} ({row['operator']})")
     else:
         st.caption("Henüz trap yok")
 

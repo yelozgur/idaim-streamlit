@@ -13,7 +13,6 @@ from datetime import datetime
 
 import config
 import sheets_client
-import utils
 
 
 # ============== PAGE CONFIG ==============
@@ -119,7 +118,7 @@ def main():
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            cells = utils.load_merged_cells()
+            cells = sheets_client.get_cells()
             st.metric("🗺️ Toplam Hücre", len(cells))
 
         with col2:
@@ -156,7 +155,7 @@ def main():
     💡 **İlk kez mi kullanıyorsun?**
     1. `SHEETS_HEADERS.md`'i oku, 7 sheet'i oluştur
     2. Streamlit Cloud → Settings → Secrets'e gcp_service_account + spreadsheet id ekle
-    3. `data/cells_full.parquet` üret (`scripts/build_cells_parquet.py` ile), Streamlit bundle'a ekle
+    3. `cells` sheet'ine 642 hücrenin koordinatlarını yükle (mevcut GeoPackage'tan export)
     4. Sol menüden **Veri Girişi** → ilk trap'ı kur
     5. **ML Retrain** → Culex modeli eğit, watch list oluştur
     6. **Dashboard** → haritadan takip et

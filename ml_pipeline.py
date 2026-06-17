@@ -22,8 +22,8 @@ from sklearn.metrics import (
 
 from config import DYNAMIC_FEATURES, MIN_SAMPLES, DISTRICTS
 from utils import (
-    load_static_cells, load_static_features, load_labeled_cells, load_watch_list,
-    clear_all_caches, update_ml_output,
+    load_cells, load_labeled_cells, load_watch_list,
+    clear_all_caches,
 )
 import sheets_client
 import gee_client
@@ -47,16 +47,43 @@ def build_3d_array(df: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
 def get_features_for_cell(cell_id: int, year: int = 2024) -> Optional[np.ndarray]:
     """Bir hücre için (5, 12) feature array getir.
 
-    Statik parquet'tan okur (features_cache_active.parquet).
+    Önce features_cache'ten bakar, yoksa/yoksa GEE'den çeker.
     Returns: shape (5, 12) veya None
     """
-    cache = load_static_features()
-    if len(cache) == 0:
+    # Cache'ten dene
+    cache = _get_cache()
+    if cache is not None and len(cache) > 0:
+        row = cache[cache["cell_id"] == cell_id]
+        if len(row) > 0:
+            return _row_to_5x12(row.iloc[0])
+
+    # Cache'te yok → hücre bilgisi al, GEE'den çek
+    cells = load_cells()
+    if len(cells) == 0:
         return None
-    row = cache[cache["cell_id"] == cell_id]
-    if len(row) == 0:
+    cell_row = cells[cells["cell_id"] == cell_id]
+    if len(cell_row) == 0:
         return None
-    return _row_to_5x12(row.iloc[0])
+
+    lat, lon = float(cell_row.iloc[0]["lat"]), float(cell_row.iloc[0]["lon"])
+
+    try:
+        features = gee_client.fetch_features_for_cell(cell_id, lat, lon, year=year)
+        if features is not None:
+            # Cache'e yaz
+            _save_to_cache(cell_id, year, features)
+        return features
+    except Exception as e:
+        st.warning(f"⚠️ Hücre #{cell_id} GEE hatası: {e}")
+        return None
+
+
+def _get_cache() -> Optional[pd.DataFrame]:
+    """features_cache sheet'ini oku."""
+    try:
+        return sheets_client.read_sheet("features_cache")
+    except Exception:
+        return None
 
 
 def _row_to_5x12(row: pd.Series) -> np.ndarray:
@@ -70,6 +97,22 @@ def _row_to_5x12(row: pd.Series) -> np.ndarray:
     return arr
 
 
+def _save_to_cache(cell_id: int, year: int, features: np.ndarray):
+    """Tek hücrenin feature'larını features_cache'e yaz."""
+    row = {
+        "cell_id": int(cell_id),
+        "feature_year": int(year),
+        "last_refresh": datetime.now().strftime("%Y-%m-%d"),
+    }
+    for i, feat in enumerate(DYNAMIC_FEATURES):
+        for m in range(12):
+            row[f"{feat}_{m+1:02d}"] = float(features[i, m])
+    try:
+        sheets_client.append_row("features_cache", row)
+    except Exception:
+        pass  # Sessizce skip, cache hatası kritik değil
+
+
 def get_features_for_cells(cell_ids: list[int], year: int = 2024) -> tuple[np.ndarray, list[int]]:
     """Birden fazla hücre için (n, 5, 12) array getir. None dönenler skip edilir.
 
@@ -77,26 +120,18 @@ def get_features_for_cells(cell_ids: list[int], year: int = 2024) -> tuple[np.nd
         X: shape (n_valid, 5, 12)
         valid_ids: X ile aynı sırada cell_id'ler
     """
-    cache = load_static_features()
-    if len(cache) == 0:
-        return np.zeros((0, 5, 12)), []
-
     X_list = []
     valid_ids = []
+    progress = st.progress(0.0, text="Feature'lar yükleniyor...")
 
-    for cid in cell_ids:
-        row = cache[cache["cell_id"] == cid]
-        if len(row) == 0:
-            continue
-        feat = _row_to_5x12(row.iloc[0])
-        # Eğer tüm değerler NaN ise skip
-        if not np.any(np.isfinite(feat)):
-            continue
-        # NaN'leri 0 ile doldur (imputer sonra halleder)
-        feat = np.nan_to_num(feat, nan=0.0)
-        X_list.append(feat)
-        valid_ids.append(cid)
+    for i, cid in enumerate(cell_ids):
+        feat = get_features_for_cell(cid, year=year)
+        if feat is not None:
+            X_list.append(feat)
+            valid_ids.append(cid)
+        progress.progress((i + 1) / len(cell_ids), text=f"Feature'lar: {i+1}/{len(cell_ids)}")
 
+    progress.empty()
     if not X_list:
         return np.zeros((0, 5, 12)), []
     return np.stack(X_list), valid_ids
@@ -160,41 +195,6 @@ def prepare_training_data(species: str) -> tuple[Optional[np.ndarray], Optional[
 
     n_pos_unique = (labeled_unique["is_positive"] == 1).sum()
     n_neg_unique = (labeled_unique["is_positive"] == 0).sum()
-
-    # ============ PSEUDO-NEGATİF SAMPLING ============
-    # Yeni başlayan sahada: lab_results çok az, negatif örnek 0 olabiliyor.
-    # Bu durumda Cyprus grid'den (37K hücre) rastgele hücreleri
-    # "pseudo-negatif" olarak ekle (background distribution temsilcisi).
-    PSEUDO_NEG_RATIO = 20  # Her pozitif için max 20 pseudo-negatif
-    target_neg = min(int(n_pos_unique * PSEUDO_NEG_RATIO), 200) if n_pos_unique > 0 else 50
-    if n_neg_unique < 5 and target_neg > 0:
-        # cells_full'dan rastgele pseudo-negatif hücreler çek
-        try:
-            all_cells = load_static_cells()
-            if len(all_cells) > 0:
-                # Lab yapılmış hücreleri çıkar
-                labeled_cell_ids = set(labeled_unique["cell_id"].astype(int).tolist())
-                pool = all_cells[~all_cells["cell_id"].isin(labeled_cell_ids)]
-                if len(pool) > 0:
-                    n_pseudo = min(target_neg, len(pool))
-                    pseudo = pool.sample(n=n_pseudo, random_state=42).copy()
-                    pseudo["species"] = "PseudoNegative"
-                    pseudo["is_positive"] = 0
-                    pseudo["weight"] = 0.3  # Pseudo-negatif düşük ağırlık
-                    pseudo["lab_confidence"] = "low"
-                    # labeled_unique'ı birleştir
-                    cols_to_keep = ["cell_id", "species", "is_positive", "weight", "lab_confidence"]
-                    pseudo_subset = pseudo[[c for c in cols_to_keep if c in pseudo.columns]]
-                    labeled_unique = pd.concat(
-                        [labeled_unique[[c for c in cols_to_keep if c in labeled_unique.columns]],
-                         pseudo_subset],
-                        ignore_index=True,
-                    )
-                    n_neg_unique = (labeled_unique["is_positive"] == 0).sum()
-                    st.caption(f"   + {n_pseudo} pseudo-negatif eklendi (lab yapılmamış hücrelerden)")
-        except Exception as e:
-            st.caption(f"⚠️ Pseudo-negatif eklenemedi: {e}")
-
     st.caption(f"📊 {species} training: {n_pos_unique} pozitif, {n_neg_unique} negatif (unique cells)")
 
     # Feature'ları yükle
@@ -443,17 +443,19 @@ def run_species_pipeline(
     with st.spinner(f"🤖 {species} final model eğitiliyor..."):
         clf, imp = train_minirocket(X_train, y_train)
 
-    # 4. Tüm hücreler için predict (statik parquet'tan)
-    cells = load_static_cells()
+    # 4. Tüm 642 hücre için predict
+    cells = load_cells()
     all_cell_ids = cells["cell_id"].astype(int).tolist()
     with st.spinner(f"📊 {len(all_cell_ids)} hücre predict ediliyor..."):
         X_all, valid_ids = get_features_for_cells(all_cell_ids)
         proba_all = predict_proba(clf, imp, X_all) if len(X_all) > 0 else np.array([])
 
-    # 5. ML output'u Sheets'e yaz (sadece proba kolonları, küçük write)
+    # 5. cells sheet'ini güncelle
     if len(proba_all) > 0:
-        proba_map = dict(zip(valid_ids, [float(p) for p in proba_all]))
-        update_ml_output(species, proba_map)
+        # valid_ids sırasına göre dict yap, tüm cells'e uygula
+        proba_map = dict(zip(valid_ids, proba_all))
+        cells_proba = cells["cell_id"].map(lambda c: proba_map.get(c, np.nan)).values
+        sheets_client.update_cells_proba(species, list(cells_proba))
 
     # 6. Per-district threshold tuning (training data üzerinden)
     if strategy == "per_district" and len(train_districts) > 0:

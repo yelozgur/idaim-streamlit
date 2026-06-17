@@ -51,19 +51,14 @@ def get_worksheet(name: str):
 # ============== READ ==============
 
 def read_sheet(name: str, dtype_fix: bool = True) -> pd.DataFrame:
-    """Sheet'i DataFrame olarak okur. 60 saniye cache'li (Sheets API 429 koruması).
+    """Sheet'i DataFrame olarak okur.
 
     dtype_fix=True ise sayısal kolonları düzeltir (Sheets'te hep string gelir).
     """
-    return _read_sheet_cached(name, dtype_fix)
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _read_sheet_cached(name: str, dtype_fix: bool) -> pd.DataFrame:
-    """Sheets'ten oku, 60 saniye cache'le. Args hashlenir, aynı args = cache hit."""
     ws = get_worksheet(name)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
     df = df.dropna(how="all")  # boş satırları at
+
     if dtype_fix and len(df) > 0:
         df = _fix_dtypes(df, name)
     return df
@@ -114,6 +109,7 @@ def append_row(sheet_name: str, row: dict):
     row_values = [str(row.get(h, "")) for h in headers]
     ws.append_row(row_values, value_input_option="USER_ENTERED")
     # Cache temizle
+    read_sheet.clear()
 
 
 def append_rows(sheet_name: str, rows: list[dict]):
@@ -124,6 +120,7 @@ def append_rows(sheet_name: str, rows: list[dict]):
     headers = ws.row_values(1)
     values = [[str(r.get(h, "")) for h in headers] for r in rows]
     ws.append_rows(values, value_input_option="USER_ENTERED")
+    read_sheet.clear()
 
 
 def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
@@ -132,12 +129,14 @@ def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
     headers = ws.row_values(1)
     col_idx = headers.index(col_name) + 1
     ws.update_cell(row_idx + 1, col_idx, value)
+    read_sheet.clear()
 
 
 def update_dataframe(sheet_name: str, df: pd.DataFrame, start_row: int = 2):
     """DataFrame'i sheet'e yaz (mevcut verinin üstüne)."""
     ws = get_worksheet(sheet_name)
     set_with_dataframe(ws, df, row=start_row, include_column_header=False)
+    read_sheet.clear()
 
 
 # ============== SPECIFIC HELPERS ==============
