@@ -12,7 +12,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.express as px
-import plotly.graph_objects as go
+import plotly.graph_objects as go  # noqa: F401  # Plotly 5.18+ Marker API değişti
 
 import sys
 from pathlib import Path
