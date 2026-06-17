@@ -183,25 +183,39 @@ from streamlit_folium import st_folium
 m = folium.Map(location=[34.9, 33.2], zoom_start=9, tiles="OpenStreetMap", control_scale=True)
 
 # Hücreler (CircleMarker — renk proba'ya göre)
-cells_layer = folium.FeatureGroup(name="🗺️ Hücreler", show=False)  # default kapalı — hız için
-for _, row in cells_view.iterrows():
-    p = row.get(proba_col)
-    if pd.isna(p):
-        p = 0
-    if p >= 0.7:
-        color = "#7f0000"
-    elif p >= 0.5:
-        color = "#d32f2f"
-    elif p >= 0.3:
-        color = "#f57c00"
-    elif p >= 0.1:
-        color = "#fbc02d"
-    else:
-        color = "#bbdefb"
+# NOT (2026-06-17): Hücre sayısı > 5000 ise sadece yüksek proba (≥0.3) hücreleri göster,
+# default kapalı (performans için). Kullanıcı layer control'den açarsa tümü görünür.
+n_cells = len(cells_view)
+if n_cells > 5000:
+    # Çok fazla hücre — sadece yüksek proba olanları pinle, layer default kapalı
+    high_proba = cells_view[cells_view[proba_col].fillna(0) >= 0.3].copy()
+    st.caption(f"⚠️ {n_cells} hücre var (yavaş). Default: sadece {len(high_proba)} yüksek proba (≥0.3) gösteriliyor. Tümü için layer'ı açın.")
+    cells_layer = folium.FeatureGroup(name=f"🗺️ Yüksek proba hücreler ({len(high_proba)})", show=True)
+    cells_to_render = high_proba
+else:
+    cells_layer = folium.FeatureGroup(name=f"🗺️ Hücreler ({n_cells})", show=True)
+    cells_to_render = cells_view
+
+# Vectorized renk ataması (iterrows yerine — 10x hız)
+def _color_for(p):
+    if p >= 0.7: return "#7f0000"
+    if p >= 0.5: return "#d32f2f"
+    if p >= 0.3: return "#f57c00"
+    if p >= 0.1: return "#fbc02d"
+    return "#bbdefb"
+
+proba_arr = pd.to_numeric(cells_to_render[proba_col], errors="coerce").fillna(0).values
+color_arr = [_color_for(p) for p in proba_arr]
+lats = cells_to_render["lat"].values
+lons = cells_to_render["lon"].values
+hovers = cells_to_render["hover_text"].values
+cell_id_strs = cells_to_render["cv_cell_id_str"].values
+
+for lat, lon, color, hover, cid in zip(lats, lons, color_arr, hovers, cell_id_strs):
     folium.CircleMarker(
-        [row["lat"], row["lon"]], radius=4,
-        popup=folium.Popup(row["hover_text"], max_width=300),
-        tooltip=f"#{row['cv_cell_id_str']} | {fmt_proba(p)}",
+        [lat, lon], radius=4,
+        popup=folium.Popup(hover, max_width=300),
+        tooltip=f"#{cid}",
         color=color, fill=True, fill_color=color, fill_opacity=0.6, weight=1,
     ).add_to(cells_layer)
 cells_layer.add_to(m)
