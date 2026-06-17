@@ -1,12 +1,12 @@
 """1_📥_Data_Entry.py — Field data entry (3 tabs, mobile-first).
 
-Tab 1: Sampling Initiation (Trap setup)
+Tab 1: Sampling Initiation (Trap setup, auto Trap ID)
 Tab 2: Trap Check (Field check, can be multiple)
 Tab 3: Lab Result (Species identification)
 
 Each tab provides:
 - Location picker: GPS / Map / Manual
-- Cell auto-detected (nearest 5km grid)
+- Cell auto-detected (nearest cell, Cyprus-bounded)
 - Form -> written to Sheets
 - Optional photos (uploaded to Drive)
 """
@@ -15,7 +15,6 @@ import pandas as pd
 from datetime import datetime
 from streamlit_folium import st_folium
 import folium
-from folium.plugins import Draw
 
 import sys
 from pathlib import Path
@@ -26,17 +25,33 @@ import sheets_client
 import drive_client
 import mobile_styles
 from gps_component import gps_button
+from utils import require_auth
 
 
 # ============== PAGE SETUP ==============
 
 st.set_page_config(page_title="Data Entry", page_icon="📥", layout="wide")
 mobile_styles.inject_mobile_css()
-from utils import require_auth
 require_auth()
 
 
 # ============== HELPERS ==============
+
+# Cyprus bounding box (filter out cells outside Cyprus, e.g. Egypt lat ~26)
+CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.5, 35.5
+CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.5, 34.5
+
+
+def filter_cyprus(cells_df: pd.DataFrame) -> pd.DataFrame:
+    """Drop cells outside Cyprus bounding box."""
+    if len(cells_df) == 0:
+        return cells_df
+    mask = (
+        (cells_df["lat"] >= CYPRUS_LAT_MIN) & (cells_df["lat"] <= CYPRUS_LAT_MAX) &
+        (cells_df["lon"] >= CYPRUS_LON_MIN) & (cells_df["lon"] <= CYPRUS_LON_MAX)
+    )
+    return cells_df[mask].copy()
+
 
 def find_nearest_cell(cells_df: pd.DataFrame, lat: float, lon: float) -> tuple[int, float]:
     """Nearest cell (Euclidean — OK for Cyprus, ~300 km)."""
@@ -48,6 +63,39 @@ def find_nearest_cell(cells_df: pd.DataFrame, lat: float, lon: float) -> tuple[i
     return int(nearest["cell_id"]), float(nearest["dist"])
 
 
+def get_cyprus_cells() -> pd.DataFrame:
+    """Get cells, filter to Cyprus only."""
+    if "cyprus_cells" not in st.session_state:
+        try:
+            all_cells = sheets_client.get_cells()
+            st.session_state["cyprus_cells"] = filter_cyprus(all_cells)
+        except Exception as e:
+            st.error(f"Cells load error: {e}")
+            st.session_state["cyprus_cells"] = pd.DataFrame()
+    return st.session_state["cyprus_cells"]
+
+
+def auto_generate_trap_id() -> str:
+    """Generate next sequential TRP-XXX ID based on existing traps."""
+    try:
+        inits = sheets_client.get_sampling_initiations(active_only=False)
+        if len(inits) == 0 or "trap_id" not in inits.columns:
+            return "TRP-001"
+        # Extract numeric part from existing IDs
+        existing_nums = []
+        for tid in inits["trap_id"].astype(str):
+            t = str(tid).strip().upper()
+            if t.startswith("TRP-"):
+                try:
+                    existing_nums.append(int(t[4:]))
+                except ValueError:
+                    pass
+        next_num = max(existing_nums, default=0) + 1
+        return f"TRP-{next_num:03d}"
+    except Exception:
+        return "TRP-001"
+
+
 def render_location_picker(label: str, key_prefix: str) -> tuple[float, float, int] | None:
     """Location picker: GPS / Map / Manual.
 
@@ -57,7 +105,7 @@ def render_location_picker(label: str, key_prefix: str) -> tuple[float, float, i
 
     method = st.radio(
         "Method",
-        ["GPS", "Map", "Manual"],
+        ["Map", "Manual", "GPS"],
         horizontal=True,
         key=f"{key_prefix}_method",
     )
@@ -71,39 +119,48 @@ def render_location_picker(label: str, key_prefix: str) -> tuple[float, float, i
             st.success(f"Location: {lat:.5f}, {lon:.5f}")
             coords = (lat, lon)
         else:
-            st.info("Click the button to get location")
+            st.info("Click the button to get your location. Browser will ask for permission.")
 
     elif method == "Map":
-        cells = st.session_state.get("cells_cache")
-        if cells is None or len(cells) == 0:
-            try:
-                cells = sheets_client.get_cells()
-                st.session_state["cells_cache"] = cells
-            except Exception as e:
-                st.error(f"Cells load error: {e}")
-                return None
+        cells = get_cyprus_cells()
+        if len(cells) == 0:
+            st.warning("No Cyprus cells available. Use Manual input.")
+            return None
 
-        if len(cells) > 0:
-            m = folium.Map(location=[34.9, 33.2], zoom_start=9, tiles="OpenStreetMap")
+        # Cyprus center, fit to bounds
+        m = folium.Map(
+            location=[34.9, 33.2],
+            zoom_start=9,
+            tiles="OpenStreetMap",
+        )
 
-            for _, row in cells.iterrows():
-                color = "red" if pd.notna(row.get("culex_proba")) and row["culex_proba"] >= 0.5 else "gray"
-                folium.CircleMarker(
-                    location=[row["lat"], row["lon"]],
-                    radius=4,
-                    popup=f"cell_id={row['cell_id']}<br>lat={row['lat']}<br>lon={row['lon']}<br>proba={row.get('culex_proba', 'N/A')}",
-                    color=color,
-                    fill=True,
-                    fill_opacity=0.4,
-                ).add_to(m)
+        for _, row in cells.iterrows():
+            color = "red" if pd.notna(row.get("culex_proba")) and row["culex_proba"] >= 0.5 else "gray"
+            folium.CircleMarker(
+                location=[row["lat"], row["lon"]],
+                radius=4,
+                popup=f"cell_id={row['cell_id']}<br>lat={row['lat']}<br>lon={row['lon']}",
+                color=color,
+                fill=True,
+                fill_opacity=0.4,
+            ).add_to(m)
 
-            map_data = st_folium(m, height=400, returned_objects=["last_clicked"], key=f"{key_prefix}_map")
+        st.caption("Click on the map to set the location.")
+        map_data = st_folium(
+            m,
+            height=400,
+            returned_objects=["last_clicked"],
+            key=f"{key_prefix}_map",
+            use_container_width=True,
+        )
 
-            if map_data and map_data.get("last_clicked"):
-                lat = map_data["last_clicked"]["lat"]
-                lon = map_data["last_clicked"]["lng"]
-                st.success(f"Selected: {lat:.5f}, {lon:.5f}")
-                coords = (lat, lon)
+        if map_data and map_data.get("last_clicked"):
+            lat = map_data["last_clicked"]["lat"]
+            lon = map_data["last_clicked"]["lng"]
+            st.success(f"Selected: {lat:.5f}, {lon:.5f}")
+            coords = (lat, lon)
+        else:
+            st.caption("Click the map to select a location.")
 
     else:  # Manual
         col1, col2 = st.columns(2)
@@ -115,8 +172,13 @@ def render_location_picker(label: str, key_prefix: str) -> tuple[float, float, i
 
     if coords:
         lat, lon = coords
+        # Sanity check: Cyprus
+        if not (CYPRUS_LAT_MIN <= lat <= CYPRUS_LAT_MAX and CYPRUS_LON_MIN <= lon <= CYPRUS_LON_MAX):
+            st.warning(f"Location is outside Cyprus bounds ({lat:.2f}, {lon:.2f}). Check the coordinates.")
+            return None
+
         try:
-            cells = st.session_state.get("cells_cache") or sheets_client.get_cells()
+            cells = get_cyprus_cells()
             cell_id, dist = find_nearest_cell(cells, lat, lon)
             if cell_id is not None:
                 dist_km = dist * 111
@@ -155,22 +217,34 @@ def tab_sampling_initiation():
     st.header("Sampling Initiation")
     st.caption("Trap setup — for the field team in the field")
 
-    trap_id = st.text_input(
-        "Trap ID *",
-        placeholder="TRP-001",
-        help="Must be unique, manual or QR code",
-    ).strip().upper()
+    # Auto-generate next Trap ID
+    if "auto_trap_id" not in st.session_state:
+        st.session_state["auto_trap_id"] = auto_generate_trap_id()
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        trap_id = st.text_input(
+            "Trap ID (auto-generated, editable)",
+            value=st.session_state["auto_trap_id"],
+            help="Auto-increments from the last trap. Edit if you need a custom ID.",
+        ).strip().upper()
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("Regenerate", use_container_width=True, help="Generate next ID"):
+            st.session_state["auto_trap_id"] = auto_generate_trap_id()
+            st.rerun()
 
     if not trap_id:
-        st.info("Enter a Trap ID (e.g. TRP-001)")
+        st.info("Trap ID is required")
         st.stop()
 
     # Already exists?
     try:
         existing = sheets_client.get_sampling_initiations(active_only=False)
         if trap_id in existing.get("trap_id", []).values:
-            st.error(f"{trap_id} is already registered. Use a different ID.")
-            st.stop()
+            st.warning(f"{trap_id} is already registered. Click Regenerate or change the ID.")
+            # Don't stop, let user decide
     except Exception:
         pass
 
@@ -240,9 +314,12 @@ def tab_sampling_initiation():
                 }
                 sheets_client.append_row("sampling_initiation", row)
 
+                # Increment session trap_id for next entry
+                st.session_state["auto_trap_id"] = auto_generate_trap_id()
+
                 st.success(f"{trap_id} set up (cell #{cell_id})")
                 st.balloons()
-                st.session_state.pop("cells_cache", None)
+                st.session_state.pop("cyprus_cells", None)
                 st.rerun()
             except Exception as e:
                 st.error(f"Save error: {e}")

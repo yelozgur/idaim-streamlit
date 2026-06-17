@@ -35,6 +35,21 @@ mobile_styles.inject_mobile_css()
 require_auth()
 
 
+# Cyprus bounding box (filter out cells outside Cyprus, e.g. Egypt)
+CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.5, 35.5
+CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.5, 34.5
+
+
+def _filter_cyprus(df: pd.DataFrame) -> pd.DataFrame:
+    if len(df) == 0:
+        return df
+    mask = (
+        (df["lat"] >= CYPRUS_LAT_MIN) & (df["lat"] <= CYPRUS_LAT_MAX) &
+        (df["lon"] >= CYPRUS_LON_MIN) & (df["lon"] <= CYPRUS_LON_MAX)
+    )
+    return df[mask].copy()
+
+
 # ============== HEADER ==============
 
 st.title("Dashboard")
@@ -102,7 +117,7 @@ with fcol4:
 st.markdown("---")
 st.subheader("Map")
 
-cells = load_cells()
+cells = _filter_cyprus(load_cells())
 traps_df = load_traps_with_state()
 labs_df = load_lab_results()
 watch_df = load_watch_list()
