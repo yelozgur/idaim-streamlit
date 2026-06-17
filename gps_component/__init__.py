@@ -1,27 +1,26 @@
 """gps_component — Vanilla HTML5 Geolocation, sandbox-safe.
 
 Streamlit Cloud CSP blocks custom components built with declare_component(path=...).
-This implementation uses st.html + navigator.geolocation + Streamlit query params.
+This uses st.html + navigator.geolocation + parent.location.replace (CSP-safe per
+Streamlit Cloud memory v27/v36).
 
 Flow:
   1. st.html renders a button + JS code (no Streamlit component).
-  2. JS calls navigator.geolocation, on success writes ?lat=X&lon=Y to URL.
+  2. JS calls navigator.geolocation, on success calls parent.location.replace
+     to navigate the Streamlit page to ?gps_lat_X=...&gps_lon_X=...
   3. Streamlit reads query params on rerun, exposes via gps_button().
-  4. The rerun is triggered by a hidden st.button() the user must click after.
 
 CSP-safe: no eval, no Function(), no postMessage to non-Streamlit origins.
+parent.location.replace is the only way to push URL changes to Streamlit when
+iframe sandboxing blocks window.location.replace.
 """
 import streamlit as st
 
 
 def _render_gps_html(key: str) -> str:
-    """Return the HTML/JS for the GPS button.
-
-    On click -> geolocation -> URL hash updated to #lat=X&lon=Y -> page reloads
-    with new query params Streamlit can read.
-    """
+    """Return the HTML/JS for the GPS button."""
     return f"""
-<div id="gps-{key}">
+<div id="gps-wrap-{key}">
 <button id="gps-btn-{key}" style="
   width: 100%;
   min-height: 56px;
@@ -34,6 +33,7 @@ def _render_gps_html(key: str) -> str:
   border-radius: 12px;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  -webkit-tap-highlight-color: transparent;
 ">
 Get my location
 </button>
@@ -43,6 +43,9 @@ Get my location
 (function() {{
   const btn = document.getElementById('gps-btn-{key}');
   const status = document.getElementById('gps-status-{key}');
+  if (!btn) {{ return; }}
+
+  // Existing query params
   const params = new URLSearchParams(window.location.search);
   const latParam = params.get('gps_lat_{key}');
   const lonParam = params.get('gps_lon_{key}');
@@ -53,6 +56,7 @@ Get my location
     status.textContent = 'Location: ' + parseFloat(latParam).toFixed(5) + ', ' + parseFloat(lonParam).toFixed(5);
     btn.textContent = 'Location acquired';
   }}
+
   btn.addEventListener('click', function() {{
     if (!navigator.geolocation) {{
       status.style.display = 'block';
@@ -71,10 +75,20 @@ Get my location
       function(pos) {{
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.set('gps_lat_{key}', lat.toString());
-        newUrl.searchParams.set('gps_lon_{key}', lon.toString());
-        window.location.replace(newUrl.toString());
+        // Update URL via parent.location.replace (CSP-safe, works through iframe sandboxing)
+        const newSearch = new URLSearchParams(window.location.search);
+        newSearch.set('gps_lat_{key}', lat.toString());
+        newSearch.set('gps_lon_{key}', lon.toString());
+        const newUrl = window.location.pathname + '?' + newSearch.toString() + window.location.hash;
+        try {{
+          window.parent.location.replace(newUrl);
+        }} catch (e) {{
+          try {{
+            window.location.replace(newUrl);
+          }} catch (e2) {{
+            status.textContent = 'Could not update location. Please copy the URL or refresh manually.';
+          }}
+        }}
       }},
       function(err) {{
         btn.disabled = false;
@@ -101,10 +115,8 @@ def gps_button(label: str = "Get my location", key: str = "gps") -> tuple[float,
 
     Returns: (lat, lon) tuple or None.
     """
-    # Render the button + JS
     st.html(_render_gps_html(key))
 
-    # Read query params (set by JS via window.location.replace)
     try:
         params = st.query_params
     except AttributeError:

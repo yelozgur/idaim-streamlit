@@ -64,11 +64,15 @@ def find_nearest_cell(cells_df: pd.DataFrame, lat: float, lon: float) -> tuple[i
 
 
 def get_cyprus_cells() -> pd.DataFrame:
-    """Get cells, filter to Cyprus only."""
+    """Get cells, filter to Cyprus only. Falls back to all cells if filter empties result."""
     if "cyprus_cells" not in st.session_state:
         try:
             all_cells = sheets_client.get_cells()
-            st.session_state["cyprus_cells"] = filter_cyprus(all_cells)
+            cyprus = filter_cyprus(all_cells)
+            # Defensive: if filter empties result, keep all
+            if len(cyprus) == 0 and len(all_cells) > 0:
+                cyprus = all_cells
+            st.session_state["cyprus_cells"] = cyprus
         except Exception as e:
             st.error(f"Cells load error: {e}")
             st.session_state["cyprus_cells"] = pd.DataFrame()

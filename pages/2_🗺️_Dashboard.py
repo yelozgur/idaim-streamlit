@@ -36,11 +36,13 @@ require_auth()
 
 
 # Cyprus bounding box (filter out cells outside Cyprus, e.g. Egypt)
-CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.5, 35.5
-CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.5, 34.5
+# Cyprus lat range: ~34.5-35.5, lon range: ~32.5-34.5
+CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.0, 36.0
+CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.0, 35.0
 
 
 def _filter_cyprus(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop cells outside Cyprus bounding box."""
     if len(df) == 0:
         return df
     mask = (
@@ -48,6 +50,16 @@ def _filter_cyprus(df: pd.DataFrame) -> pd.DataFrame:
         (df["lon"] >= CYPRUS_LON_MIN) & (df["lon"] <= CYPRUS_LON_MAX)
     )
     return df[mask].copy()
+
+
+def _filter_cyprus_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter to Cyprus, but if no cells remain keep all (defensive)."""
+    if len(df) == 0:
+        return df
+    cyprus = _filter_cyprus(df)
+    if len(cyprus) == 0:
+        return df  # fallback: keep all
+    return cyprus
 
 
 # ============== HEADER ==============
@@ -117,10 +129,15 @@ with fcol4:
 st.markdown("---")
 st.subheader("Map")
 
-cells = _filter_cyprus(load_cells())
+all_cells = load_cells()
+cells = _filter_cyprus_safe(all_cells)
 traps_df = load_traps_with_state()
 labs_df = load_lab_results()
 watch_df = load_watch_list()
+
+# Defensive warning if Cyprus filter dropped most cells
+if len(cells) < len(all_cells) * 0.5 and len(all_cells) > 10:
+    st.warning(f"{len(all_cells) - len(cells)} cells outside Cyprus bounds. Clean the cells sheet to remove them.")
 
 # Filters
 if len(cells) > 0 and len(district_filter) < len(config.DISTRICTS):
