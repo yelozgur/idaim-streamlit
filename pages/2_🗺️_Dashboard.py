@@ -340,13 +340,17 @@ if map_data and map_data.get("last_clicked"):
     clicked_lat = clicked.get("lat")
     clicked_lon = clicked.get("lng")
     if clicked_lat is not None and clicked_lon is not None and len(cells) > 0:
-        cell_dist = (
-            (cells["lat"] - clicked_lat) ** 2
-            + (cells["lon"] - clicked_lon) ** 2
-        ) ** 0.5
-        nearest_idx = cell_dist.idxmin()
+        # Scaled Euclidean (lon scaled by cos(lat) at Cyprus ~35°N)
+        lat_rad = np.radians(clicked_lat)
+        lon_scale = np.cos(lat_rad)
+        cell_dist_km = (
+            ((cells["lat"] - clicked_lat) ** 2
+             + ((cells["lon"] - clicked_lon) * lon_scale) ** 2) ** 0.5
+            * 111.0
+        )
+        nearest_idx = cell_dist_km.idxmin()
         nearest = cells.loc[nearest_idx]
-        dist_km = float(cell_dist.loc[nearest_idx]) * 111.0  # ~km (Cyprus ~35°N)
+        dist_km = float(cell_dist_km.loc[nearest_idx])
         st.info(
             f"Clicked: nearest cell **#{int(nearest['cell_id'])}** "
             f"({nearest.get('district', '?')}) — {dist_km:.2f} km away\n\n"

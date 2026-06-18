@@ -12,6 +12,7 @@ Each tab provides:
 """
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from streamlit_folium import st_folium
 import folium
@@ -54,13 +55,24 @@ def filter_cyprus(cells_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def find_nearest_cell(cells_df: pd.DataFrame, lat: float, lon: float) -> tuple[int, float]:
-    """Nearest cell (Euclidean — OK for Cyprus, ~300 km)."""
+    """Nearest cell (scaled Euclidean, returns distance in km).
+
+    At Cyprus latitude (~35°N), 1 deg lon ≈ 91 km vs 1 deg lat ≈ 111 km.
+    A naive Euclidean with `*111` on both axes overestimates lon distance by
+    ~18%. We scale lon by cos(lat) before computing, then multiply by 111.
+    """
     if len(cells_df) == 0:
         return None, float("inf")
     cells_df = cells_df.copy()
-    cells_df["dist"] = ((cells_df["lat"] - lat) ** 2 + (cells_df["lon"] - lon) ** 2) ** 0.5
-    nearest = cells_df.loc[cells_df["dist"].idxmin()]
-    return int(nearest["cell_id"]), float(nearest["dist"])
+    lat_rad = np.radians(lat)
+    lon_scale = np.cos(lat_rad)
+    cells_df["dist_km"] = (
+        ((cells_df["lat"] - lat) ** 2
+         + ((cells_df["lon"] - lon) * lon_scale) ** 2) ** 0.5
+        * 111.0
+    )
+    nearest = cells_df.loc[cells_df["dist_km"].idxmin()]
+    return int(nearest["cell_id"]), float(nearest["dist_km"])
 
 
 def get_cyprus_cells() -> pd.DataFrame:
@@ -183,9 +195,8 @@ def render_location_picker(label: str, key_prefix: str) -> tuple[float, float, i
 
         try:
             cells = get_cyprus_cells()
-            cell_id, dist = find_nearest_cell(cells, lat, lon)
+            cell_id, dist_km = find_nearest_cell(cells, lat, lon)
             if cell_id is not None:
-                dist_km = dist * 111
                 if dist_km < 5:
                     st.success(f"Cell **#{cell_id}** (distance: {dist_km:.2f} km)")
                 else:
