@@ -49,10 +49,16 @@ def get_worksheet(name: str):
 
 # ============== READ ==============
 
+@st.cache_data(ttl=60, show_spinner=False)
 def read_sheet(name: str, dtype_fix: bool = True) -> pd.DataFrame:
-    """Read sheet as DataFrame.
+    """Read sheet as DataFrame (60s cache for Sheets API 429 protection).
 
     With dtype_fix=True, numeric columns are coerced (Sheets returns strings).
+
+    Note: Must be cache_data-decorated so that read_sheet.clear() works in
+    append_row/append_rows/update_cell/update_dataframe (post-write cache
+    invalidation). Pre-v0.6.2 this was missing — login (update_last_login)
+    and any data-mutating action would AttributeError on read_sheet.clear().
     """
     ws = get_worksheet(name)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
