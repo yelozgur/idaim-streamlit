@@ -416,7 +416,25 @@ def tab_trap_check():
                 sheets_client.append_row("trap_checks", row)
 
                 if status == "Trap Missing":
-                    sheets_client.update_cell("sampling_initiation", 0, "state", "")
+                    # v0.6.1: replace placeholder update_cell call (which wrote
+                    # to header row) with manual row lookup by trap_id.
+                    try:
+                        ws = sheets_client.get_worksheet("sampling_initiation")
+                        headers = ws.row_values(1)
+                        if "trap_id" in headers and "state" in headers:
+                            all_rows = ws.get_all_values()
+                            trap_id_idx = headers.index("trap_id") + 1
+                            target_row = None
+                            for i, row in enumerate(all_rows[1:], start=2):
+                                if len(row) >= trap_id_idx and row[trap_id_idx - 1] == trap_id:
+                                    target_row = i
+                                    break
+                            if target_row:
+                                state_col = headers.index("state") + 1
+                                ws.update_cell(target_row, state_col, "missing")
+                                sheets_client.read_sheet.clear()
+                    except Exception as e:
+                        st.warning(f"Could not update trap state: {e}")
 
                 st.success(f"Check #{n_checks + 1} saved: {status}")
                 st.rerun()

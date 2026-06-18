@@ -479,14 +479,36 @@ def run_species_pipeline(
             species, proba_ordered, cells, thresholds, strategy, custom_threshold
         )
 
-        # Eski watch list'i temizle (bu tür için)
+        # Clean up old watch list (per species): keep visited=True and other species,
+        # drop visited=False for this species. Prevents unbounded growth.
         old_watch = load_watch_list()
+        to_keep: list[dict] = []
         if len(old_watch) > 0:
-            # Eski listeyi silmek için sheet'i yeniden yazmak gerekir
-            # Basit yaklaşım: sadece visited=True olanları tut
-            pass  # POC için skip, yeni watch direkt eklenir
+            keep_mask = (old_watch["species"] != species) | (old_watch["visited"] == True)
+            kept = old_watch[keep_mask].copy()
+            if len(kept) > 0:
+                for col in kept.columns:
+                    if str(kept[col].dtype) == "Int64":
+                        kept[col] = kept[col].astype("Int64").astype(object).where(kept[col].notna(), "")
+                    elif kept[col].dtype == "object":
+                        kept[col] = kept[col].apply(
+                            lambda v: "TRUE" if v is True else ("FALSE" if v is False else v)
+                        )
+                to_keep = kept.to_dict("records")
 
-        # Sheets'e yaz
+        # Clear data rows in watch_list, then re-insert kept + new
+        try:
+            ws = sheets_client.get_worksheet("watch_list")
+            all_values = ws.get_all_values()
+            n_data_rows = max(0, len(all_values) - 1)
+            if n_data_rows > 0:
+                ws.delete_rows(2, n_data_rows + 1)
+            if to_keep:
+                sheets_client.append_rows("watch_list", to_keep)
+        except Exception as e:
+            st.warning(f"Could not clean old watch list: {e}")
+
+        # Append new watch
         if len(watch) > 0:
             watch_rows = watch.to_dict("records")
             for r in watch_rows:

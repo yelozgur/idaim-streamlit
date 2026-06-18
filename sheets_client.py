@@ -121,11 +121,26 @@ def append_rows(sheet_name: str, rows: list[dict]):
 
 
 def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
-    """Update a single cell (1-indexed row)."""
+    """Update a single cell.
+
+    Args:
+        sheet_name: Sheet name.
+        row_idx: 0-indexed DATA row (0=first data row, header excluded).
+                 sheet_row = row_idx + 2 (1 for header offset + 1 for 1-indexed).
+        col_name: Column name (must exist in header).
+        value: Value to write.
+
+    Note: v0.6 had a bug where row_idx+1 was used, causing row_idx=0 to write
+    to the header row. Fixed in v0.6.1 to use row_idx+2.
+    """
     ws = get_worksheet(sheet_name)
     headers = ws.row_values(1)
+    if col_name not in headers:
+        st.error(f"Column '{col_name}' not found in '{sheet_name}'")
+        return
     col_idx = headers.index(col_name) + 1
-    ws.update_cell(row_idx + 1, col_idx, value)
+    sheet_row = row_idx + 2
+    ws.update_cell(sheet_row, col_idx, value)
     read_sheet.clear()
 
 

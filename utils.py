@@ -175,6 +175,38 @@ def species_to_color(species: str) -> str:
     }.get(species, "#757575")
 
 
+# Folium.Icon only accepts named colors ('red', 'green', 'blue', 'orange', etc.)
+# — hex strings are silently dropped (all markers fall back to blue).
+# This table maps our internal hex colors to Folium named colors.
+_HEX_TO_FOLIUM = {
+    "#4caf50": "green",
+    "#f44336": "red",
+    "#ff9800": "orange",
+    "#9e9e9e": "gray",
+    "#1976d2": "blue",
+    "#d32f2f": "red",
+    "#7b1fa2": "purple",
+    "#757575": "gray",
+    "#bdbdbd": "lightgray",
+    "#bbdefb": "lightblue",
+    "#7f0000": "darkred",
+    "#f57c00": "orange",
+    "#fbc02d": "beige",
+}
+
+
+def hex_to_folium_name(hex_color: str) -> str:
+    """Map a hex color to a Folium named color.
+
+    Folium.Icon(color=..., icon_color=...) only accepts named colors
+    ('red', 'green', 'blue', 'orange', 'darkred', etc.). Passing hex
+    ('#4caf50') is silently dropped and falls back to default blue.
+    """
+    if not hex_color:
+        return "blue"
+    return _HEX_TO_FOLIUM.get(hex_color.lower(), "blue")
+
+
 # ============== FORMAT HELPERS ==============
 
 def fmt_proba(p: float) -> str:

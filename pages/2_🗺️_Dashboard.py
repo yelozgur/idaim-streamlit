@@ -23,6 +23,7 @@ from utils import (
     load_cells, load_sampling_initiations, load_trap_checks, load_lab_results,
     load_watch_list, load_traps_with_state, load_labeled_cells,
     proba_to_color, state_to_color, status_to_color, species_to_color,
+    hex_to_folium_name,
     fmt_proba, fmt_count, compute_trap_counts, compute_label_counts,
     clear_all_caches, require_auth,
 )
@@ -274,8 +275,11 @@ if show_traps and len(traps_df) > 0:
             location=[row["lat"], row["lon"]],
             popup=folium.Popup(popup_html, max_width=300),
             tooltip=f"{row['trap_id']} ({row.get('last_check', row.get('state', '?'))})",
-            icon=folium.Icon(color=color.split("#")[0] if not color.startswith("#") else "blue",
-                            icon_color=color, icon="bug", prefix="fa"),
+            icon=folium.Icon(
+                color=hex_to_folium_name(color),
+                icon_color="white",
+                icon="bug", prefix="fa",
+            ),
         ).add_to(traps_layer)
     traps_layer.add_to(m)
 
@@ -329,6 +333,27 @@ map_data = st_folium(
     key="dashboard_map",
     use_container_width=True,
 )
+
+# v0.6.1: Show nearest cell info on map click (previously captured but ignored)
+if map_data and map_data.get("last_clicked"):
+    clicked = map_data["last_clicked"]
+    clicked_lat = clicked.get("lat")
+    clicked_lon = clicked.get("lng")
+    if clicked_lat is not None and clicked_lon is not None and len(cells) > 0:
+        cell_dist = (
+            (cells["lat"] - clicked_lat) ** 2
+            + (cells["lon"] - clicked_lon) ** 2
+        ) ** 0.5
+        nearest_idx = cell_dist.idxmin()
+        nearest = cells.loc[nearest_idx]
+        dist_km = float(cell_dist.loc[nearest_idx]) * 111.0  # ~km (Cyprus ~35°N)
+        st.info(
+            f"Clicked: nearest cell **#{int(nearest['cell_id'])}** "
+            f"({nearest.get('district', '?')}) — {dist_km:.2f} km away\n\n"
+            f"Culex: {fmt_proba(nearest.get('culex_proba'))} • "
+            f"Aedes: {fmt_proba(nearest.get('aedes_proba'))} • "
+            f"Confidence: {nearest.get('confidence_tier', '?')}"
+        )
 
 
 # ============== WATCH LIST ==============
