@@ -1,5 +1,6 @@
 streamlit>=1.32
 streamlit-folium>=0.18
+streamlit-js-eval>=0.1.7
 folium>=0.15
 plotly>=5.18
 pandas>=2.0
