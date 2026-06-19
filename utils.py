@@ -1,26 +1,103 @@
 """utils.py — Shared helpers across pages.
 
 Cached data loading, color scales, format helpers.
+
+Data architecture (v0.6.5):
+- 37K cells (lat/lon/district) live in data/cells_full.parquet (Streamlit
+  bundle, not Sheets). Sheets' "cells" tab has lat/lon SWAPPED — do not
+  read cells from Sheets. v0.6.4 fix: load_cells now merges Parquet (lat/lon)
+  with Sheets (ML proba, freshest).
+- Dynamic data (sampling_initiation, trap_checks, lab_results, watch_list,
+  users) lives in Sheets.
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from typing import Optional
 
 import sheets_client
 from config import DISTRICTS
 
 
+# ============== PATHS ==============
+
+# Repo root (parent of streamlit/) — Parquet lives at <repo>/data/cells_full.parquet
+REPO_ROOT = Path(__file__).resolve().parent
+CELLS_PARQUET = REPO_ROOT / "data" / "cells_full.parquet"
+
+
+# ============== STATIC CELLS (Parquet) ==============
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_static_cells() -> pd.DataFrame:
+    """37K cells from data/cells_full.parquet (correct lat/lon, 1h cache).
+
+    This is the source of truth for cell geometry. Do not read cells from
+    Sheets — the Sheets 'cells' tab has lat/lon SWAPPED (data import bug).
+    """
+    if not CELLS_PARQUET.exists():
+        st.error(
+            f"❌ Statik cells dosyası yok: {CELLS_PARQUET}. "
+            f"Parquet bundle'ı repo'ya eklenmemiş."
+        )
+        return pd.DataFrame()
+    df = pd.read_parquet(CELLS_PARQUET)
+    if "cell_id" in df.columns:
+        df["cell_id"] = pd.to_numeric(df["cell_id"], errors="coerce").astype("Int64")
+    return df
+
+
 # ============== CACHED DATA LOADERS ==============
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_cells() -> pd.DataFrame:
-    """All cells (5 min cache)."""
+def load_ml_output() -> pd.DataFrame:
+    """ML proba + tier from Sheets (freshest predictions).
+
+    Sheets has lat/lon SWAPPED but the culex_proba/aedes_proba/confidence_tier
+    columns are valid. We only use these columns, never the Sheets lat/lon.
+    """
     try:
-        return sheets_client.get_cells()
+        df = sheets_client.get_cells()
     except Exception as e:
-        st.error(f"Cells load error: {e}")
+        st.warning(f"ML output load error: {e}")
         return pd.DataFrame()
+    if len(df) == 0:
+        return df
+    keep = ["cell_id"]
+    for c in ["culex_proba", "aedes_proba", "confidence_tier", "last_updated"]:
+        if c in df.columns:
+            keep.append(c)
+    return df[keep].copy()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_merged_cells() -> pd.DataFrame:
+    """Cells (Parquet) + ML output (Sheets) merged. Sheet ML takes precedence."""
+    cells = load_static_cells()
+    if len(cells) == 0:
+        return cells
+    ml = load_ml_output()
+    if len(ml) > 0:
+        ml_cols = [c for c in ml.columns if c in ["cell_id", "culex_proba", "aedes_proba", "confidence_tier", "last_updated"]]
+        # Ensure cell_id types match for merge
+        cells = cells.copy()
+        cells["cell_id"] = pd.to_numeric(cells["cell_id"], errors="coerce").astype("Int64")
+        ml = ml.copy()
+        ml["cell_id"] = pd.to_numeric(ml["cell_id"], errors="coerce").astype("Int64")
+        cells = cells.merge(ml[ml_cols], on="cell_id", how="left", suffixes=("", "_ml"))
+    return cells
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_cells() -> pd.DataFrame:
+    """All cells (5 min cache). Wrapper around load_merged_cells().
+
+    Source of truth: Parquet for lat/lon/district, Sheets for ML proba.
+    Do NOT read cells directly from sheets_client.get_cells() — its lat/lon
+    columns are swapped (data import bug, see v0.6.5 fix).
+    """
+    return load_merged_cells()
 
 
 @st.cache_data(ttl=120, show_spinner=False)
