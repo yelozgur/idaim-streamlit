@@ -125,19 +125,12 @@ with fcol4:
     show_traps = st.checkbox("Show traps", value=True)
     show_labs = st.checkbox("Show lab markers", value=True)
     show_watch_only = st.checkbox("Watch list only", value=False)
-
-# v0.6.4: cells opt-in toggle — default off, only watchlist cells shown on map.
-# Architectural note: 37K cells live in Parquet (not pulled from Sheets) to
-# avoid Sheets API rate limits. We don't render them on the map by default;
-# the operational view is the watchlist (cells flagged for field verification).
-# Tick the box below to load every cell (slow on mobile).
-_cells_count = len(load_cells())
-show_all_cells = st.checkbox(
-    f"Show all {_cells_count:,} cells (slow on mobile, opt-in)",
-    value=False,
-    key="dash_show_all_cells",
-    help="By default only watchlist cells are shown (operational view). Tick to render every cell in the Parquet bundle.",
-)
+    show_all_cells = st.checkbox(
+        f"Show all {len(load_cells()):,} cells (slow)",
+        value=False,
+        key="dash_show_all_cells",
+        help="Default off — only watchlist cells render. Tick to overlay the full 37K Parquet grid (slow on mobile).",
+    )
 
 
 # ============== MAP ==============

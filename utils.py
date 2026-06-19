@@ -142,6 +142,7 @@ def load_watch_list() -> pd.DataFrame:
 def clear_all_caches():
     """Clear all caches (after data change)."""
     load_cells.clear()
+    load_ml_output.clear()
     load_sampling_initiations.clear()
     load_trap_checks.clear()
     load_lab_results.clear()
