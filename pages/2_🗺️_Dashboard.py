@@ -36,10 +36,12 @@ mobile_styles.inject_mobile_css()
 require_auth()
 
 
-# Cyprus bounding box (filter out cells outside Cyprus, e.g. Egypt)
-# Cyprus lat range: ~34.5-35.5, lon range: ~32.5-34.5
-CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.0, 36.0
-CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.0, 35.0
+# Cyprus bounding box (filter out cells outside Cyprus, e.g. Egypt, sea)
+# Real Cyprus land bounds: lat 34.55-35.70 (Karpaz peninsula north), lon 32.40-34.60
+# Earlier constants (34.0-36.0, 32.0-35.0) were too generous and let 890 cells
+# in the sea through, plus 2,060 mislabeled "Keryneia" cells in west Cyprus.
+CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.55, 35.70
+CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.40, 34.60
 
 
 def _filter_cyprus(df: pd.DataFrame) -> pd.DataFrame:
@@ -124,6 +126,19 @@ with fcol4:
     show_labs = st.checkbox("Show lab markers", value=True)
     show_watch_only = st.checkbox("Watch list only", value=False)
 
+# v0.6.4: cells opt-in toggle — default off, only watchlist cells shown on map.
+# Architectural note: 37K cells live in Parquet (not pulled from Sheets) to
+# avoid Sheets API rate limits. We don't render them on the map by default;
+# the operational view is the watchlist (cells flagged for field verification).
+# Tick the box below to load every cell (slow on mobile).
+_cells_count = len(load_cells())
+show_all_cells = st.checkbox(
+    f"Show all {_cells_count:,} cells (slow on mobile, opt-in)",
+    value=False,
+    key="dash_show_all_cells",
+    help="By default only watchlist cells are shown (operational view). Tick to render every cell in the Parquet bundle.",
+)
+
 
 # ============== MAP ==============
 
@@ -187,34 +202,75 @@ proba_col = "culex_proba" if "Culex" in species_filter else (
 )
 
 
-# ============== CELLS — vectorized subset rendering ==============
+# ============== CELLS — watchlist always shown, full grid opt-in ==============
 
-# For large grids (37K cells), only pin high-probability cells. Show all via
-# lighter rendering if grid is small.
+# v0.6.4: dashboard operational view = watchlist cells (high-priority for
+# field verification). Full 37K grid is opt-in via the toggle above.
 N_CELLS = len(cells)
-SUBSET_THRESHOLD = 5000
-
-if N_CELLS > SUBSET_THRESHOLD:
-    # Show only high-probability cells (>= 0.3) as pins
-    pin_df = cells[pd.to_numeric(cells[proba_col], errors="coerce").fillna(0) >= 0.3].copy()
-    st.caption(f"Large grid ({N_CELLS} cells) — showing {len(pin_df)} high-probability pins (>= 0.3). All cells still on the map layer.")
-else:
-    pin_df = cells
-    st.caption(f"{N_CELLS} cells shown.")
 
 # Vectorized: build popup + tooltip lists, then a single FeatureGroup
-cells_layer = folium.FeatureGroup(name="Cells", show=True)
+# v0.6.4: only show watchlist cells by default (operational view).
+# Full grid render is gated by the show_all_cells toggle.
+watch_layer_df = pd.DataFrame()
+if len(watch_df) > 0 and len(cells) > 0:
+    if species_filter == "Culex (proba)":
+        wl_species = "culex"
+    elif species_filter == "Aedes (proba)":
+        wl_species = "aedes"
+    else:
+        wl_species = None
+    wl = watch_df if wl_species is None else watch_df[watch_df["species"] == wl_species]
+    if len(wl) > 0:
+        cells_for_merge = cells[["cell_id", "lat", "lon"]].copy()
+        cells_for_merge["cell_id"] = pd.to_numeric(cells_for_merge["cell_id"], errors="coerce").astype("Int64")
+        wl = wl.copy()
+        wl["cell_id"] = pd.to_numeric(wl["cell_id"], errors="coerce").astype("Int64")
+        watch_layer_df = wl.merge(cells_for_merge, on="cell_id", how="inner")
 
-if len(pin_df) > 0:
-    lats = pin_df["lat"].tolist()
-    lons = pin_df["lon"].tolist()
-    cell_ids = pin_df["cell_id"].astype(int).tolist()
-    districts = pin_df.get("district", pd.Series(["?"] * len(pin_df))).tolist()
-    culex_probas = pin_df.get("culex_proba", pd.Series([np.nan] * len(pin_df))).tolist()
-    aedes_probas = pin_df.get("aedes_proba", pd.Series([np.nan] * len(pin_df))).tolist()
-    confidence_tiers = pin_df.get("confidence_tier", pd.Series(["?"] * len(pin_df))).tolist()
-    last_updated = pin_df.get("last_updated", pd.Series(["?"] * len(pin_df))).tolist()
-    selected_probas = pin_df[proba_col].tolist()
+# Layer 1: watchlist cells (always on)
+if len(watch_layer_df) > 0:
+    watch_layer = folium.FeatureGroup(name=f"👀 Watchlist ({len(watch_layer_df)})", show=True)
+    for _, w in watch_layer_df.iterrows():
+        sp = float(w.get("proba", 0) or 0)
+        color = proba_to_color(sp, threshold=0.10)
+        lat_v = float(w["lat"])
+        lon_v = float(w["lon"])
+        cid = int(w["cell_id"])
+        thr = w.get("threshold_used", np.nan)
+        folium.CircleMarker(
+            location=[lat_v, lon_v],
+            radius=10,
+            popup=folium.Popup(
+                f"<b>📍 Cell #{cid}</b> (watchlist)<br>"
+                f"Proba: {fmt_proba(sp)}<br>"
+                f"Threshold used: {fmt_proba(thr)}<br>"
+                f"Lat/Lon: {lat_v:.4f}, {lon_v:.4f}",
+                max_width=300,
+            ),
+            tooltip=f"📍 #{cid} (proba={fmt_proba(sp)})",
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.8,
+            weight=2,
+        ).add_to(watch_layer)
+    watch_layer.add_to(m)
+    st.caption(f"👀 {len(watch_layer_df)} watchlist cells on map.")
+else:
+    st.caption("💡 No watchlist cells for the current species filter. Run training from the Admin page.")
+
+# Layer 2: full cell grid (only if show_all_cells is True)
+if show_all_cells and len(cells) > 0:
+    cells_layer = folium.FeatureGroup(name=f"🗺️ All cells ({len(cells):,})", show=True)
+    lats = cells["lat"].tolist()
+    lons = cells["lon"].tolist()
+    cell_ids = cells["cell_id"].astype(int).tolist()
+    districts = cells.get("district", pd.Series(["?"] * len(cells))).tolist()
+    culex_probas = cells.get("culex_proba", pd.Series([np.nan] * len(cells))).tolist()
+    aedes_probas = cells.get("aedes_proba", pd.Series([np.nan] * len(cells))).tolist()
+    confidence_tiers = cells.get("confidence_tier", pd.Series(["?"] * len(cells))).tolist()
+    last_updated = cells.get("last_updated", pd.Series(["?"] * len(cells))).tolist()
+    selected_probas = cells[proba_col].tolist()
 
     for lat, lon, cid, dist, cp, ap, ct, lu, sp in zip(
         lats, lons, cell_ids, districts, culex_probas, aedes_probas,
@@ -242,8 +298,10 @@ if len(pin_df) > 0:
             fill_opacity=0.6,
             weight=1,
         ).add_to(cells_layer)
-
-cells_layer.add_to(m)
+    cells_layer.add_to(m)
+    st.caption(f"🗺️ Rendering all {len(cells):,} cells — may be slow on mobile.")
+elif not show_all_cells:
+    st.caption("💡 Tick 'Show all cells' above to render the full 37K grid (default off, watchlist only).")
 
 
 # ============== TRAPS ==============

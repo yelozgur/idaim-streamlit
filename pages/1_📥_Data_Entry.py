@@ -39,8 +39,13 @@ require_auth()
 # ============== HELPERS ==============
 
 # Cyprus bounding box (filter out cells outside Cyprus, e.g. Egypt lat ~26)
-CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.5, 35.5
-CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.5, 34.5
+# Real Cyprus land: lat 34.55-35.70, lon 32.40-34.60 (matches Dashboard)
+CYPRUS_LAT_MIN, CYPRUS_LAT_MAX = 34.55, 35.70
+CYPRUS_LON_MIN, CYPRUS_LON_MAX = 32.40, 34.60
+
+# Cell grid is 500m × 500m, so 1.5km = 3 cells. 5km was way too generous
+# (10 cells away) — saha ekibi için pratik değil.
+NEAREST_CELL_WARN_KM = 1.5
 
 
 def filter_cyprus(cells_df: pd.DataFrame) -> pd.DataFrame:
@@ -197,10 +202,14 @@ def render_location_picker(label: str, key_prefix: str) -> tuple[float, float, i
             cells = get_cyprus_cells()
             cell_id, dist_km = find_nearest_cell(cells, lat, lon)
             if cell_id is not None:
-                if dist_km < 5:
+                if dist_km < NEAREST_CELL_WARN_KM:
                     st.success(f"Cell **#{cell_id}** (distance: {dist_km:.2f} km)")
                 else:
-                    st.warning(f"Nearest cell #{cell_id}, but {dist_km:.1f} km away (over 5 km)")
+                    st.warning(
+                        f"Nearest cell #{cell_id} is {dist_km:.2f} km away "
+                        f"(over {NEAREST_CELL_WARN_KM} km threshold). "
+                        f"Cell grid is 500m so this is unusually far — check coords."
+                    )
                 return (lat, lon, cell_id)
         except Exception as e:
             st.error(f"Cell lookup error: {e}")
