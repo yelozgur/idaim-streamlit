@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
+.envrc
+
+# Mavis session artifacts
+.opencode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDAIM runtime artifacts (rebuildable)
+data/02_intermediate/
+data/05_geolibre/
+data/06_training/
+data/07_models/
+data/logs/
+data/exports/
+data/cells_full.meta.json
+data/run_metadata.json
+data/features_cache_active.parquet
+data/output*.parquet
+
+# Sheet reference docs (local-only, may contain credentials)
+SHEETS_HEADERS.md
+
+# Test/debug
+output/
+*.log
+.idea/
+.vscode/
