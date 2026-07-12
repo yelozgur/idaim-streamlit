@@ -29,6 +29,10 @@ data/output*.parquet
 # Sheet reference docs (local-only, may contain credentials)
 SHEETS_HEADERS.md
 
+# Google service account (HF Spaces Secrets, never commit)
+data/ee-yelozgur*.json
+**/ee-yelozgur*.json
+
 # Test/debug
 output/
 *.log
