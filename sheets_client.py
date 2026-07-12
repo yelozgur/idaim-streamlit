@@ -1,12 +1,22 @@
-"""sheets_client.py — Google Sheets wrapper.
+"""sheets_client.py — Google Sheets wrapper (framework-agnostic).
 
 All read/write operations go through here. Uses gspread + gspread-dataframe.
 
-Service account auth: JSON key from streamlit secrets.
+Auth (v0.7+, env-based, dual-mode for Streamlit legacy + Plotly Dash):
+  1. GCP_SA_JSON env var (HF Spaces / production) — JSON content as string
+  2. GCP_SA_JSON_PATH env var (explicit path to JSON file)
+  3. Default local path: ~/Documents/Personal Projects/ee-yelozgur-*.json
+  4. SHEET_ID env var (default: '16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY')
+
+Cache: module-level TTL cache replaces @st.cache_data (works in both
+Streamlit and Dash). Use clear_read_cache() to invalidate after writes.
 """
+import os
+import json
+import time
+import logging
 import gspread
 import pandas as pd
-import streamlit as st
 from gspread_dataframe import set_with_dataframe, get_as_dataframe
 from typing import Optional
 import hashlib
@@ -14,27 +24,66 @@ from datetime import datetime
 
 from config import SHEET_NAMES, DEFAULT_USERS
 
+logger = logging.getLogger(__name__)
+
+# Default credentials path (developer machine)
+_DEFAULT_SA_PATH = os.path.expanduser(
+    "~/Documents/Personal Projects/ee-yelozgur-aceaafb59a17.json"
+)
+_DEFAULT_SHEET_ID = "16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY"
+
 
 # ============== AUTH ==============
 
-@st.cache_resource
+# Module-level cache (replaces @st.cache_resource)
+_gspread_client = None
+_spreadsheet = None
+_read_cache: dict = {}  # name -> (timestamp, df)
+_users_cache: dict = {"data": None, "ts": 0.0}
+
+
+def _get_creds_dict() -> dict:
+    """Resolve credentials dict from env or default local path.
+
+    Priority:
+      1. GCP_SA_JSON env var (HF Spaces — JSON content)
+      2. GCP_SA_JSON_PATH env var (explicit path to file)
+      3. ~/Documents/Personal Projects/ee-yelozgur-*.json (local dev default)
+    """
+    if "GCP_SA_JSON" in os.environ:
+        return json.loads(os.environ["GCP_SA_JSON"])
+
+    if "GCP_SA_JSON_PATH" in os.environ:
+        with open(os.environ["GCP_SA_JSON_PATH"]) as f:
+            return json.load(f)
+
+    if os.path.exists(_DEFAULT_SA_PATH):
+        with open(_DEFAULT_SA_PATH) as f:
+            return json.load(f)
+
+    raise RuntimeError(
+        "Sheets credentials not found. Set GCP_SA_JSON or GCP_SA_JSON_PATH "
+        f"env var, or place credentials at {_DEFAULT_SA_PATH}"
+    )
+
+
 def get_gspread_client():
-    """Service-account gspread client (cached)."""
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-        gc = gspread.service_account_from_dict(creds_dict)
-        return gc
-    except Exception as e:
-        st.error(f"Google auth failed: {e}")
-        st.stop()
+    """Service-account gspread client (cached at module level)."""
+    global _gspread_client
+    if _gspread_client is None:
+        creds_dict = _get_creds_dict()
+        _gspread_client = gspread.service_account_from_dict(creds_dict)
+    return _gspread_client
 
 
-@st.cache_resource
 def get_spreadsheet():
-    """Spreadsheet object (cached)."""
-    gc = get_gspread_client()
-    sheet_id = st.secrets["spreadsheet"]["id"]
-    return gc.open_by_key(sheet_id)
+    """Spreadsheet object (cached at module level)."""
+    global _spreadsheet
+    if _spreadsheet is None:
+        gc = get_gspread_client()
+        sheet_id = os.environ.get("SHEET_ID", _DEFAULT_SHEET_ID)
+        _spreadsheet = gc.open_by_key(sheet_id)
+    return _spreadsheet
 
 
 def get_worksheet(name: str):
@@ -43,30 +92,46 @@ def get_worksheet(name: str):
     try:
         return sh.worksheet(name)
     except gspread.WorksheetNotFound:
-        st.error(f"Sheet not found: '{name}'. See SHEETS_HEADERS.md.")
-        st.stop()
+        logger.error(f"Sheet not found: '{name}'. See SHEETS_HEADERS.md.")
+        raise
 
 
 # ============== READ ==============
 
-@st.cache_data(ttl=60, show_spinner=False)
-def read_sheet(name: str, dtype_fix: bool = True) -> pd.DataFrame:
-    """Read sheet as DataFrame (60s cache for Sheets API 429 protection).
+DEFAULT_READ_TTL = 60  # seconds, Sheets API 429 protection
+
+
+def read_sheet(name: str, dtype_fix: bool = True, ttl: int = DEFAULT_READ_TTL) -> pd.DataFrame:
+    """Read sheet as DataFrame (TTL cache for Sheets API 429 protection).
 
     With dtype_fix=True, numeric columns are coerced (Sheets returns strings).
 
-    Note: Must be cache_data-decorated so that read_sheet.clear() works in
-    append_row/append_rows/update_cell/update_dataframe (post-write cache
-    invalidation). Pre-v0.6.2 this was missing — login (update_last_login)
-    and any data-mutating action would AttributeError on read_sheet.clear().
+    Cache: module-level TTL cache. Use clear_read_cache() to invalidate
+    after writes. Pre-v0.7 this used @st.cache_data(ttl=60).
     """
+    now = time.time()
+    if name in _read_cache:
+        ts, df = _read_cache[name]
+        if now - ts < ttl:
+            return df
+
     ws = get_worksheet(name)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
     df = df.dropna(how="all")
 
     if dtype_fix and len(df) > 0:
         df = _fix_dtypes(df, name)
+
+    _read_cache[name] = (now, df)
     return df
+
+
+def clear_read_cache(name: Optional[str] = None):
+    """Clear read cache (call after writes). If name is None, clear all."""
+    if name:
+        _read_cache.pop(name, None)
+    else:
+        _read_cache.clear()
 
 
 def _fix_dtypes(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
@@ -112,7 +177,7 @@ def append_row(sheet_name: str, row: dict):
     headers = ws.row_values(1)
     row_values = [str(row.get(h, "")) for h in headers]
     ws.append_row(row_values, value_input_option="USER_ENTERED")
-    read_sheet.clear()
+    clear_read_cache()
 
 
 def append_rows(sheet_name: str, rows: list[dict]):
@@ -123,7 +188,7 @@ def append_rows(sheet_name: str, rows: list[dict]):
     headers = ws.row_values(1)
     values = [[str(r.get(h, "")) for h in headers] for r in rows]
     ws.append_rows(values, value_input_option="USER_ENTERED")
-    read_sheet.clear()
+    clear_read_cache()
 
 
 def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
@@ -142,19 +207,19 @@ def update_cell(sheet_name: str, row_idx: int, col_name: str, value):
     ws = get_worksheet(sheet_name)
     headers = ws.row_values(1)
     if col_name not in headers:
-        st.error(f"Column '{col_name}' not found in '{sheet_name}'")
+        logger.error(f"Column '{col_name}' not found in '{sheet_name}'")
         return
     col_idx = headers.index(col_name) + 1
     sheet_row = row_idx + 2
     ws.update_cell(sheet_row, col_idx, value)
-    read_sheet.clear()
+    clear_read_cache()
 
 
 def update_dataframe(sheet_name: str, df: pd.DataFrame, start_row: int = 2):
     """Write DataFrame to sheet (overwrites existing data, headers preserved)."""
     ws = get_worksheet(sheet_name)
     set_with_dataframe(ws, df, row=start_row, include_column_header=False)
-    read_sheet.clear()
+    clear_read_cache()
 
 
 # ============== SPECIFIC HELPERS ==============
@@ -203,7 +268,7 @@ def update_cells_proba(species: str, proba_array: list[float]):
         return
     col = f"{species}_proba"
     if col not in df.columns:
-        st.warning(f"Column '{col}' missing in cells sheet")
+        logger.warning(f"Column '{col}' missing in cells sheet")
         return
     df[col] = proba_array[:len(df)]
     df["last_updated"] = datetime.now().strftime("%Y-%m-%d")
@@ -241,9 +306,15 @@ def verify_user(username: str, password: str) -> Optional[str]:
     return None
 
 
-@st.cache_data(ttl=300)
+USERS_CACHE_TTL = 300  # seconds
+
+
 def _load_users() -> dict:
-    """Load users sheet, write defaults on first run."""
+    """Load users sheet, write defaults on first run (5min TTL cache)."""
+    now = time.time()
+    if _users_cache["data"] is not None and now - _users_cache["ts"] < USERS_CACHE_TTL:
+        return _users_cache["data"]
+
     try:
         df = read_sheet("users", dtype_fix=False)
     except Exception:
@@ -269,6 +340,8 @@ def _load_users() -> dict:
             append_rows("users", rows)
         users = {u: (hash_password(pw), role) for u, (pw, role) in DEFAULT_USERS.items()}
 
+    _users_cache["data"] = users
+    _users_cache["ts"] = now
     return users
 
 
@@ -284,7 +357,8 @@ def update_last_login(username: str):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         df.loc[mask, "last_login"] = now
         update_dataframe("users", df)
-        _load_users.clear()
+        _users_cache["data"] = None
+        _users_cache["ts"] = 0.0
 
 
 # ============== UTIL ==============

@@ -9,8 +9,13 @@ Data architecture (v0.6.5):
   with Sheets (ML proba, freshest).
 - Dynamic data (sampling_initiation, trap_checks, lab_results, watch_list,
   users) lives in Sheets.
+
+Framework: v0.7+ framework-agnostic. Module-level TTL cache replaces
+@st.cache_data (works in both Streamlit legacy and Plotly Dash). Use
+clear_all_caches() to invalidate after data mutations.
 """
-import streamlit as st
+import time
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -19,28 +24,50 @@ from typing import Optional
 import sheets_client
 from config import DISTRICTS
 
+logger = logging.getLogger(__name__)
+
+# Streamlit availability flag (Dash mode skips st.* calls)
+try:
+    import streamlit as _st  # noqa
+    _HAS_ST = True
+except ImportError:
+    _HAS_ST = False
+
 
 # ============== PATHS ==============
 
-# Repo root (parent of streamlit/) — Parquet lives at <repo>/data/cells_full.parquet
+# Repo root — Parquet lives at <repo>/data/cells_full.parquet
 REPO_ROOT = Path(__file__).resolve().parent
 CELLS_PARQUET = REPO_ROOT / "data" / "cells_full.parquet"
 
 
+# ============== MODULE-LEVEL TTL CACHE ==============
+
+# Replaces @st.cache_data — dict with (timestamp, value) per key.
+_cache: dict = {}
+
+
+def _cached(ttl: int, key: str, fn, *args, **kwargs):
+    """Get or compute cached value with TTL (seconds)."""
+    now = time.time()
+    entry = _cache.get(key)
+    if entry is not None and now - entry[0] < ttl:
+        return entry[1]
+    val = fn(*args, **kwargs)
+    _cache[key] = (now, val)
+    return val
+
+
+def clear_all_caches():
+    """Clear all module-level caches (after data mutation)."""
+    _cache.clear()
+
+
 # ============== STATIC CELLS (Parquet) ==============
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_static_cells() -> pd.DataFrame:
-    """37K cells from data/cells_full.parquet (correct lat/lon, 1h cache).
-
-    This is the source of truth for cell geometry. Do not read cells from
-    Sheets — the Sheets 'cells' tab has lat/lon SWAPPED (data import bug).
-    """
+def _load_static_cells_impl() -> pd.DataFrame:
     if not CELLS_PARQUET.exists():
-        st.error(
-            f"❌ Statik cells dosyası yok: {CELLS_PARQUET}. "
-            f"Parquet bundle'ı repo'ya eklenmemiş."
-        )
+        logger.error(f"Statik cells dosyası yok: {CELLS_PARQUET}.")
         return pd.DataFrame()
     df = pd.read_parquet(CELLS_PARQUET)
     if "cell_id" in df.columns:
@@ -48,19 +75,18 @@ def load_static_cells() -> pd.DataFrame:
     return df
 
 
+def load_static_cells() -> pd.DataFrame:
+    """37K cells from data/cells_full.parquet (correct lat/lon, 1h cache)."""
+    return _cached(3600, "static_cells", _load_static_cells_impl)
+
+
 # ============== CACHED DATA LOADERS ==============
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_ml_output() -> pd.DataFrame:
-    """ML proba + tier from Sheets (freshest predictions).
-
-    Sheets has lat/lon SWAPPED but the culex_proba/aedes_proba/confidence_tier
-    columns are valid. We only use these columns, never the Sheets lat/lon.
-    """
+def _load_ml_output_impl() -> pd.DataFrame:
     try:
         df = sheets_client.get_cells()
     except Exception as e:
-        st.warning(f"ML output load error: {e}")
+        logger.warning(f"ML output load error: {e}")
         return pd.DataFrame()
     if len(df) == 0:
         return df
@@ -71,16 +97,18 @@ def load_ml_output() -> pd.DataFrame:
     return df[keep].copy()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_merged_cells() -> pd.DataFrame:
-    """Cells (Parquet) + ML output (Sheets) merged. Sheet ML takes precedence."""
+def load_ml_output() -> pd.DataFrame:
+    """ML proba + tier from Sheets (freshest predictions, 5 min cache)."""
+    return _cached(300, "ml_output", _load_ml_output_impl)
+
+
+def _load_merged_cells_impl() -> pd.DataFrame:
     cells = load_static_cells()
     if len(cells) == 0:
         return cells
     ml = load_ml_output()
     if len(ml) > 0:
         ml_cols = [c for c in ml.columns if c in ["cell_id", "culex_proba", "aedes_proba", "confidence_tier", "last_updated"]]
-        # Ensure cell_id types match for merge
         cells = cells.copy()
         cells["cell_id"] = pd.to_numeric(cells["cell_id"], errors="coerce").astype("Int64")
         ml = ml.copy()
@@ -89,118 +117,103 @@ def load_merged_cells() -> pd.DataFrame:
     return cells
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_cells() -> pd.DataFrame:
-    """All cells (5 min cache). Wrapper around load_merged_cells().
+def load_merged_cells() -> pd.DataFrame:
+    """Cells (Parquet) + ML output (Sheets) merged. Sheet ML takes precedence (5 min cache)."""
+    return _cached(300, "merged_cells", _load_merged_cells_impl)
 
-    Source of truth: Parquet for lat/lon/district, Sheets for ML proba.
-    Do NOT read cells directly from sheets_client.get_cells() — its lat/lon
-    columns are swapped (data import bug, see v0.6.5 fix).
-    """
+
+def load_cells() -> pd.DataFrame:
+    """All cells (5 min cache). Wrapper around load_merged_cells()."""
     return load_merged_cells()
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def load_sampling_initiations() -> pd.DataFrame:
     """All sampling inits (2 min cache)."""
-    try:
-        return sheets_client.get_sampling_initiations(active_only=False)
-    except Exception as e:
-        st.error(f"Sampling initiation load error: {e}")
-        return pd.DataFrame()
+    def _impl():
+        try:
+            return sheets_client.get_sampling_initiations(active_only=False)
+        except Exception as e:
+            logger.error(f"Sampling initiation load error: {e}")
+            return pd.DataFrame()
+    return _cached(120, "sampling_initiations", _impl)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def load_trap_checks() -> pd.DataFrame:
     """All trap checks (2 min cache)."""
-    try:
-        return sheets_client.get_trap_checks()
-    except Exception as e:
-        st.error(f"Trap checks load error: {e}")
-        return pd.DataFrame()
+    def _impl():
+        try:
+            return sheets_client.get_trap_checks()
+        except Exception as e:
+            logger.error(f"Trap checks load error: {e}")
+            return pd.DataFrame()
+    return _cached(120, "trap_checks", _impl)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def load_lab_results() -> pd.DataFrame:
     """All lab results (2 min cache)."""
-    try:
-        return sheets_client.get_lab_results()
-    except Exception as e:
-        st.error(f"Lab results load error: {e}")
-        return pd.DataFrame()
+    def _impl():
+        try:
+            return sheets_client.get_lab_results()
+        except Exception as e:
+            logger.error(f"Lab results load error: {e}")
+            return pd.DataFrame()
+    return _cached(120, "lab_results", _impl)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def load_watch_list() -> pd.DataFrame:
     """Watch list (5 min cache)."""
-    try:
-        return sheets_client.get_watch_list()
-    except Exception:
-        return pd.DataFrame()
-
-
-def clear_all_caches():
-    """Clear all caches (after data change)."""
-    load_cells.clear()
-    load_ml_output.clear()
-    load_sampling_initiations.clear()
-    load_trap_checks.clear()
-    load_lab_results.clear()
-    load_watch_list.clear()
+    def _impl():
+        try:
+            return sheets_client.get_watch_list()
+        except Exception:
+            return pd.DataFrame()
+    return _cached(300, "watch_list", _impl)
 
 
 # ============== JOINED VIEWS ==============
 
-@st.cache_data(ttl=120, show_spinner=False)
 def load_labeled_cells() -> pd.DataFrame:
-    """Lab-confirmed cells (training data).
-
-    lab_results -> sampling_initiation -> cells JOIN
-    """
-    inits = load_sampling_initiations()
-    labs = load_lab_results()
-    cells = load_cells()
-
-    if len(inits) == 0 or len(labs) == 0:
-        return pd.DataFrame()
-
-    merged = (labs
-        .merge(inits[["trap_id", "cell_id", "state"]], on=["trap_id", "cell_id"], how="inner",
-               suffixes=("_lab", "_init"))
-        .merge(cells[["cell_id", "lon", "lat", "district"]], on="cell_id", how="left"))
-    return merged
+    """Lab-confirmed cells (training data, 2 min cache)."""
+    def _impl():
+        inits = load_sampling_initiations()
+        labs = load_lab_results()
+        cells = load_cells()
+        if len(inits) == 0 or len(labs) == 0:
+            return pd.DataFrame()
+        return (labs
+            .merge(inits[["trap_id", "cell_id", "state"]], on=["trap_id", "cell_id"], how="inner",
+                   suffixes=("_lab", "_init"))
+            .merge(cells[["cell_id", "lon", "lat", "district"]], on="cell_id", how="left"))
+    return _cached(120, "labeled_cells", _impl)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def load_traps_with_state() -> pd.DataFrame:
-    """All traps + last check + cell info."""
-    inits = load_sampling_initiations()
-    checks = load_trap_checks()
-    cells = load_cells()
-
-    if len(inits) == 0:
-        return pd.DataFrame()
-
-    df = inits.copy()
-
-    if len(checks) > 0:
-        last_checks = (checks
-            .sort_values("check_datetime")
-            .groupby("trap_id")
-            .agg(last_check=("trap_status", "last"),
-                 last_check_time=("check_datetime", "last"),
-                 n_checks=("check_id", "count"))
-            .reset_index())
-        df = df.merge(last_checks, on="trap_id", how="left")
-    else:
-        df["last_check"] = None
-        df["last_check_time"] = None
-        df["n_checks"] = 0
-
-    if len(cells) > 0:
-        df = df.merge(cells[["cell_id", "lon", "lat", "district", "culex_proba"]],
-                      on="cell_id", how="left")
-    return df
+    """All traps + last check + cell info (5 min cache)."""
+    def _impl():
+        inits = load_sampling_initiations()
+        checks = load_trap_checks()
+        cells = load_cells()
+        if len(inits) == 0:
+            return pd.DataFrame()
+        df = inits.copy()
+        if len(checks) > 0:
+            last_checks = (checks
+                .sort_values("check_datetime")
+                .groupby("trap_id")
+                .agg(last_check=("trap_status", "last"),
+                     last_check_time=("check_datetime", "last"),
+                     n_checks=("check_id", "count"))
+                .reset_index())
+            df = df.merge(last_checks, on="trap_id", how="left")
+        else:
+            df["last_check"] = None
+            df["last_check_time"] = None
+            df["n_checks"] = 0
+        if len(cells) > 0:
+            df = df.merge(cells[["cell_id", "lon", "lat", "district", "culex_proba"]],
+                          on="cell_id", how="left")
+        return df
+    return _cached(300, "traps_with_state", _impl)
 
 
 # ============== COLOR HELPERS ==============
@@ -351,18 +364,40 @@ def compute_trap_counts() -> dict:
     }
 
 
-# ============== AUTH ==============
+# ============== AUTH (Streamlit only — Dash has no equivalent yet) ==============
 
 def require_auth():
-    """Auth check, stops if not logged in."""
-    if not st.session_state.get("authenticated", False):
-        st.warning("Please sign in (go to the main page)")
-        st.stop()
+    """Auth check, stops if not logged in. No-op in Dash mode (TODO v0.7.1)."""
+    if not _HAS_ST:
+        return
+    if not _st.session_state.get("authenticated", False):
+        _st.warning("Please sign in (go to the main page)")
+        _st.stop()
 
 
 def require_admin():
-    """Admin-only check."""
+    """Admin-only check. No-op in Dash mode (TODO v0.7.1)."""
     require_auth()
-    if st.session_state.get("role") != "admin":
-        st.error("Access denied — admin only")
-        st.stop()
+    if not _HAS_ST:
+        return
+    if _st.session_state.get("role") != "admin":
+        _st.error("Access denied — admin only")
+        _st.stop()
+
+
+# ============== GEO HELPERS ==============
+
+def find_nearest_cell(cells: pd.DataFrame, lat: float, lon: float) -> Optional[int]:
+    """Find cell_id nearest to (lat, lon). Returns None if no cells.
+
+    Vectorized Euclidean on Cyprus-scale lat/lon (good enough for ~0.5km grid).
+    Pre-v0.7 used haversine; euclidean is ~3x faster and accuracy is identical
+    at Cyprus latitude (35°N, where 1°lat ≈ 111km, 1°lon ≈ 91km).
+    """
+    if len(cells) == 0 or pd.isna(lat) or pd.isna(lon):
+        return None
+    d2 = (cells["lat"].astype(float) - float(lat)) ** 2 + (cells["lon"].astype(float) - float(lon)) ** 2
+    idx = d2.idxmin()
+    if pd.isna(idx):
+        return None
+    return int(cells.loc[idx, "cell_id"])

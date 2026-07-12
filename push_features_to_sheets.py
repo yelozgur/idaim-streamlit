@@ -11,8 +11,12 @@ Schema (64 cols):
 
 Rate limit handling: gspread append_rows with batches of 1000 rows × 64 cols.
 ~37 batches, ~2-3 minutes total. Sheets API has 60 writes/min/user default.
+
+Auth (v0.7+): env-based via sheets_client._get_creds_dict(). Set
+GCP_SA_JSON (HF Spaces) or GCP_SA_JSON_PATH env var. Default local
+path (~/Documents/Personal Projects/ee-yelozgur-*.json) used otherwise.
 """
-import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,8 +26,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 REPO = Path(__file__).resolve().parent
-SA_PATH = Path('/Users/ozguryel/Documents/Personal Projects/ee-yelozgur-aceaafb59a17.json')
-SHEET_ID = '16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY'
+sys.path.insert(0, str(REPO))
+import sheets_client  # for _get_creds_dict() — same auth as Streamlit/Dash
+
+SHEET_ID = os.environ.get('SHEET_ID', '16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY')
 TAB_NAME = 'features_active'
 BATCH_SIZE = 1000  # rows per write
 
@@ -53,10 +59,11 @@ def main():
     merged = merged[['cell_id', 'lat', 'lon', 'district'] + feature_cols]
     print(f'  columns: {len(merged.columns)} ({merged.columns[:8].tolist()} ...)')
 
-    # Open Sheets
+    # Open Sheets (auth via sheets_client._get_creds_dict — env or default)
     print('Connecting to Google Sheets...')
+    creds_dict = sheets_client._get_creds_dict()
     creds = Credentials.from_service_account_info(
-        json.loads(SA_PATH.read_text()),
+        creds_dict,
         scopes=['https://www.googleapis.com/auth/spreadsheets']
     )
     gc = gspread.authorize(creds)
