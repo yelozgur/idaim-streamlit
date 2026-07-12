@@ -3,7 +3,7 @@
 Architecture:
 - 37K cells (lat/lon/district from Parquet, ML proba from Sheets)
 - Plotly Express scatter_mapbox with WebGL rendering (smooth at 100K+ points)
-- mapbox_style="open-street-map" (no token required)
+- mapbox_style=utils.get_mapbox_style() (no token required)
 - Callback: district / confidence / species filters
 - Toggles: show_watch_list, show_traps, show_labs
 - Cell click → detail panel
@@ -195,7 +195,7 @@ def update_metrics(data):
 def update_map(data, species, districts, confidence, toggles):
     if not data or not data.get("cells"):
         return px.scatter_mapbox(lat=[], lon=[]).update_layout(
-            mapbox_style="open-street-map",
+            mapbox_style=utils.get_mapbox_style(),
             margin={"r": 0, "t": 0, "l": 0, "b": 0},
         )
 
@@ -209,7 +209,7 @@ def update_map(data, species, districts, confidence, toggles):
         cells = cells[cells["district"].isin(districts)]
     if len(cells) == 0:
         return px.scatter_mapbox(lat=[], lon=[]).update_layout(
-            mapbox_style="open-street-map",
+            mapbox_style=utils.get_mapbox_style(),
             margin={"r": 0, "t": 0, "l": 0, "b": 0},
         )
 
@@ -300,7 +300,7 @@ def update_map(data, species, districts, confidence, toggles):
             )
 
     fig.update_layout(
-        mapbox_style="open-street-map",
+        mapbox_style=utils.get_mapbox_style(),
         mapbox=dict(center=dict(lat=35.0, lon=33.4), zoom=8),
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),

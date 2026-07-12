@@ -10,9 +10,19 @@ Open: http://127.0.0.1:8050
 Production (HF Spaces / gunicorn):
     gunicorn dash_app:server --bind 0.0.0.0:7860 --workers 2
 """
+import os
 import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html
+import plotly.express as px
+
+
+# Set Mapbox access token (env var MAPBOX_TOKEN).
+# If unset, falls back to open-street-map (free OSM tiles, but Render shared IP
+# hits rate limits — see idaim.md). Get free token at
+# https://account.mapbox.com/access-tokens/ (50K loads/month free tier).
+if os.environ.get("MAPBOX_TOKEN"):
+    px.set_mapbox_access_token(os.environ["MAPBOX_TOKEN"])
 
 
 app = dash.Dash(

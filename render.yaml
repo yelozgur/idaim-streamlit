@@ -19,6 +19,11 @@ services:
         value: 3.11.12
       - key: SHEET_ID
         value: 16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY
+      # MAPBOX_TOKEN: SET MANUALLY in Render dashboard (Mapbox public token).
+      # Free tier: 50K loads/month at https://account.mapbox.com/access-tokens/
+      # Speeds up Plotly scatter_mapbox (avoids OSM tile rate limit on Render shared IP).
+      - key: MAPBOX_TOKEN
+        sync: false
       # GCP_SA_JSON: SET MANUALLY in Render dashboard (sync: false → secret)
       # Paste the single-line JSON from:
       #   cat ~/Personal\ Projects/ee-yelozgur-*.json | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)))"

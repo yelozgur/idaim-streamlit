@@ -387,6 +387,14 @@ def require_admin():
 
 # ============== GEO HELPERS ==============
 
+def get_mapbox_style() -> str:
+    """Plotly mapbox_style: 'basic' (Mapbox CDN, fast, needs token) if
+    MAPBOX_TOKEN env var is set, else 'open-street-map' (free OSM tiles,
+    rate-limited on shared IPs like Render free tier).
+    """
+    return "basic" if os.environ.get("MAPBOX_TOKEN") else "open-street-map"
+
+
 def find_nearest_cell(cells: pd.DataFrame, lat: float, lon: float) -> Optional[int]:
     """Find cell_id nearest to (lat, lon). Returns None if no cells.
 

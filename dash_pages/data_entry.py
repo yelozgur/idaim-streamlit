@@ -464,7 +464,7 @@ def _cyprus_map(data):
     cells = pd.DataFrame((data or {}).get("cells_for_map", []))
     if len(cells) == 0:
         return px.scatter_mapbox(lat=[], lon=[]).update_layout(
-            mapbox_style="open-street-map",
+            mapbox_style=utils.get_mapbox_style(),
             mapbox=dict(center=dict(lat=35.0, lon=33.4), zoom=8),
             margin={"r": 0, "t": 0, "l": 0, "b": 0},
         )
@@ -475,7 +475,7 @@ def _cyprus_map(data):
         zoom=8, height=350,
     )
     fig.update_layout(
-        mapbox_style="open-street-map",
+        mapbox_style=utils.get_mapbox_style(),
         mapbox=dict(center=dict(lat=35.0, lon=33.4), zoom=8),
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
     )
