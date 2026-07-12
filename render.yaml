@@ -1,0 +1,24 @@
+# Render.com Blueprint — IDAIM Dash app
+# v0.7+ (replaces Streamlit Cloud deploy)
+#
+# Deploy: Render Dashboard → New → Blueprint → select this repo
+# Env var GCP_SA_JSON: manually set in Render dashboard (Sheets creds)
+
+services:
+  - type: web
+    name: idaim-dash
+    runtime: python
+    plan: free
+    region: frankfurt  # EU, close to Cyprus pilot users
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn dash_app:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.12
+      - key: SHEET_ID
+        value: 16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY
+      # GCP_SA_JSON: SET MANUALLY in Render dashboard (sync: false → secret)
+      # Paste the single-line JSON from:
+      #   cat ~/Personal\ Projects/ee-yelozgur-*.json | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)))"
