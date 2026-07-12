@@ -126,10 +126,10 @@ with fcol4:
     show_labs = st.checkbox("Show lab markers", value=True)
     show_watch_only = st.checkbox("Watch list only", value=False)
     show_all_cells = st.checkbox(
-        f"Show all {len(load_cells()):,} cells (slow)",
+        f"Show all {len(load_cells()):,} cells",
         value=False,
         key="dash_show_all_cells",
-        help="Default off — only watchlist cells render. Tick to overlay the full 37K Parquet grid (slow on mobile).",
+        help="Default off — only watchlist cells render. Tick to overlay the full 37K Parquet grid (clustered for performance).",
     )
 
 
@@ -255,6 +255,21 @@ else:
 # Layer 2: full cell grid (only if show_all_cells is True)
 if show_all_cells and len(cells) > 0:
     cells_layer = folium.FeatureGroup(name=f"🗺️ All cells ({len(cells):,})", show=True)
+
+    # Wrap 37K markers in MarkerCluster for performance (v0.6.10).
+    # removeOutsideVisibleBounds skips DOM insertion for off-viewport markers — big win.
+    cells_cluster = MarkerCluster(
+        name="Cell grid (clustered)",
+        options={
+            "disableClusteringAtZoom": 13,  # zoom 13'te bireysel marker'lar
+            "spiderfyOnMaxZoom": True,
+            "removeOutsideVisibleBounds": True,
+            "maxClusterRadius": 40,
+            "chunkedLoading": True,         # 37K marker'ı parça parça yükle
+            "chunkInterval": 200,           # 200ms aralıklarla chunk
+        },
+    )
+
     lats = cells["lat"].tolist()
     lons = cells["lon"].tolist()
     cell_ids = cells["cell_id"].astype(int).tolist()
@@ -290,9 +305,11 @@ if show_all_cells and len(cells) > 0:
             fill_color=color,
             fill_opacity=0.6,
             weight=1,
-        ).add_to(cells_layer)
+        ).add_to(cells_cluster)
+
+    cells_cluster.add_to(cells_layer)
     cells_layer.add_to(m)
-    st.caption(f"🗺️ Rendering all {len(cells):,} cells — may be slow on mobile.")
+    st.caption(f"🗺️ Rendering all {len(cells):,} cells (clustered).")
 elif not show_all_cells:
     st.caption("💡 Tick 'Show all cells' above to render the full 37K grid (default off, watchlist only).")
 
