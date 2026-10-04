@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IDAIM Google Sheets schema",
+  "description": "Single source of truth for the DATA V2 spreadsheet contract, shared by the Python ML pipeline (idaim-pipeline) and the Next.js web app (idaim-web). Column order matters: gspread append_rows and the Sheets API write by header name, but the Python scripts build rows positionally, so a reorder here is a breaking change for both sides.",
+  "spreadsheetId": "16wqnRUUPNBA_qhPMEdy4g9gCm_QKu5IxyCbJweStRCY",
+  "note": "The 'cells' tab is intentionally absent. Its lat/lon are SWAPPED (data import bug). Cell geometry comes from data/cells_full.parquet, exported to public/cells.geojson. Never read lat/lon from the Sheets 'cells' tab.",
+  "tabs": {
+    "sampling_initiation": {
+      "owner": "field",
+      "description": "One row per trap installation. Links to watch_list via cell_id and to lab_results via trap_id.",
+      "columns": [
+        { "name": "init_id", "type": "string", "writable": false, "note": "Auto-generated on write." },
+        { "name": "trap_id", "type": "string" },
+        { "name": "cell_id", "type": "integer" },
+        { "name": "sampling_start_time", "type": "datetime" },
+        { "name": "operator", "type": "enum", "values": ["Ceyda", "Marlen", "Yesim", "Gregoris", "Mustafa", "Costas", "Other"] },
+        { "name": "sampling_method", "type": "enum", "values": ["Ovitraps", "Larvae Collection", "BG Sentinel", "EVS", "Human Land Catching"] },
+        { "name": "site_description", "type": "string" },
+        { "name": "comments", "type": "string" },
+        { "name": "photo_urls", "type": "string", "note": "Comma-separated Drive URLs." },
+        { "name": "state", "type": "enum", "values": ["active", "closed", "missing"], "note": "State machine: trap installed -> closed. Lab results are only accepted when state='closed'." }
+      ]
+    },
+    "trap_checks": {
+      "owner": "field",
+      "description": "Field check visits. Multiple rows per trap_id.",
+      "columns": [
+        { "name": "check_id", "type": "string", "writable": false, "note": "Auto-generated on write." },
+        { "name": "trap_id", "type": "string" },
+        { "name": "check_datetime", "type": "datetime" },
+        { "name": "trap_status", "type": "enum", "values": ["Missing", "Disturbed", "Battery out", "Valid", "Other"] },
+        { "name": "comments", "type": "string" },
+        { "name": "image_urls", "type": "string", "note": "Comma-separated Drive URLs." },
+        { "name": "sampling_finish_id", "type": "string", "note": "Auto-generated: TRAPID + start + finish." }
+      ]
+    },
+    "lab_results": {
+      "owner": "lab",
+      "description": "Laboratory identification results. Gated: only traps whose sampling_initiation.state == 'closed' may receive a lab result.",
+      "columns": [
+        { "name": "lab_id", "type": "string", "writable": false, "note": "Auto-generated on write." },
+        { "name": "trap_id", "type": "string" },
+        { "name": "sampling_lab_id", "type": "string", "note": "Auto-generated, links to the sampling episode." },
+        { "name": "cell_id", "type": "integer" },
+        { "name": "lab_date", "type": "datetime" },
+        { "name": "lab_operator", "type": "enum", "values": ["Gregoris", "Ceyda", "Operator1", "Operator2"] },
+        { "name": "specimen_lifecycle", "type": "enum", "values": ["Egg", "Larva", "Adult"] },
+        { "name": "identification_method", "type": "enum", "values": ["Morphological", "Molecular"] },
+        { "name": "species", "type": "enum", "values": ["Aedes", "Culex", "Mixed", "Other", "Negative"] },
+        { "name": "count", "type": "integer" },
+        { "name": "lab_confidence", "type": "string" },
+        { "name": "comments", "type": "string" },
+        { "name": "image_urls", "type": "string", "note": "Comma-separated Drive URLs." }
+      ]
+    },
+    "watch_list": {
+      "owner": "ml",
+      "description": "Ranked output of the weekly retrain. Written only by train_local.py. The web app reads it; only the admin page may toggle 'visited'.",
+      "columns": [
+        { "name": "cell_id", "type": "integer" },
+        { "name": "species", "type": "enum", "values": ["aedes", "culex"] },
+        { "name": "proba", "type": "number", "note": "Model probability 0..1." },
+        { "name": "threshold_used", "type": "number", "note": "Global default 0.10; per-district tuning in production." },
+        { "name": "district", "type": "string" },
+        { "name": "added_at", "type": "datetime" },
+        { "name": "visited", "type": "boolean" },
+        { "name": "trap_id", "type": "string", "note": "Set once the watch-list cell is sampled." }
+      ]
+    },
+    "users": {
+      "owner": "admin",
+      "description": "Legacy auth store. Superseded by schema_idaim.users in Vercel Postgres (bcrypt) during the Next.js migration. Retained for the Streamlit app until cutover.",
+      "columns": [
+        { "name": "username", "type": "string" },
+        { "name": "password_hash", "type": "string", "note": "SHA256 in the Streamlit era; bcrypt in the web app." },
+        { "name": "role", "type": "enum", "values": ["admin", "field", "lab"] },
+        { "name": "last_login", "type": "datetime" }
+      ]
+    },
+    "features_active": {
+      "owner": "ml",
+      "description": "Read-only mirror of features_cache_active.parquet (36,905 cells x 60 dynamic features), written by push_features_to_sheets.py. Exists for inspection only. The app does not read this tab at runtime.",
+      "columns": "cell_id, lat, lon, district, then 5 features x 12 months in June-May cycle order (LST_06, NDVI_06, Humidity_06, Precip_06, WindSpeed_06, ... LST_05, NDVI_05, Humidity_05, Precip_05, WindSpeed_05)"
+    }
+  }
+}
